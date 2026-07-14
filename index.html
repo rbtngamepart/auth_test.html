@@ -91,7 +91,8 @@
   .modal-actions .btn-cancel{background:none; color:var(--ink-soft); border:1px solid var(--line);}
   .modal-actions .btn-apply{background:var(--accent); color:#fff;}
   .label-wrap{position:absolute;}
-  .photo-label{background:#000; color:#fff; font-weight:700; padding:6px 10px; border-radius:3px; text-align:center; white-space:pre-wrap; outline:none; min-width:1.5em; cursor:text;}
+  .photo-label{background:#000; color:#fff; font-weight:700; padding:6px 10px; border-radius:3px; text-align:center; white-space:pre-wrap; outline:none; min-width:1.5em; cursor:text; box-sizing:border-box; display:flex; align-items:center; justify-content:center;}
+  .label-resize{position:absolute; right:-6px; bottom:-6px; width:12px; height:12px; background:#fff; border:2px solid var(--accent); border-radius:2px; cursor:nwse-resize;}
   .label-toolbar{position:absolute; top:-24px; left:0; display:flex; gap:2px; background:var(--surface); border:1px solid var(--line); border-radius:6px; padding:2px; box-shadow:0 2px 6px rgba(0,0,0,.15); white-space:nowrap;}
   .label-toolbar button{border:none; background:none; font-size:11px; padding:3px 6px; cursor:pointer; border-radius:4px;}
   .label-toolbar button:hover{background:var(--bg);}
@@ -635,6 +636,12 @@ function drawLabels(stage, photo, editable){
     const labelEl = document.createElement('div');
     labelEl.className = 'photo-label';
     labelEl.style.fontSize = (lbl.fontSize||14)+'px';
+    if (lbl.widthPct != null && lbl.heightPct != null){
+      const stageRect = stage.getBoundingClientRect();
+      labelEl.style.width = (stageRect.width * lbl.widthPct/100)+'px';
+      labelEl.style.height = (stageRect.height * lbl.heightPct/100)+'px';
+      labelEl.style.overflow = 'hidden';
+    }
     labelEl.textContent = lbl.text;
 
     if (editable){
@@ -663,6 +670,31 @@ function drawLabels(stage, photo, editable){
         window.addEventListener('pointerup', up);
       });
       wrap.appendChild(toolbar);
+
+      // 크기 조절 손잡이 (오른쪽 아래) - 드래그하면 라벨의 가로/세로 크기가 바뀝니다.
+      // 글자 크기는 그대로 유지되고(A-/A+로 별도 조절), 박스 크기만 바뀝니다.
+      const resizeHandle = document.createElement('div');
+      resizeHandle.className = 'label-resize';
+      resizeHandle.addEventListener('pointerdown', (e)=>{
+        e.stopPropagation();
+        const stageRect = stage.getBoundingClientRect();
+        const startRect = labelEl.getBoundingClientRect();
+        const startW = startRect.width, startH = startRect.height;
+        const startX = e.clientX, startY = e.clientY;
+        const move = (ev)=>{
+          const newW = Math.max(20, startW + (ev.clientX-startX));
+          const newH = Math.max(16, startH + (ev.clientY-startY));
+          lbl.widthPct = newW/stageRect.width*100;
+          lbl.heightPct = newH/stageRect.height*100;
+          labelEl.style.width = newW+'px';
+          labelEl.style.height = newH+'px';
+          labelEl.style.overflow = 'hidden';
+        };
+        const up = ()=>{ window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); };
+        window.addEventListener('pointermove', move);
+        window.addEventListener('pointerup', up);
+      });
+      wrap.appendChild(resizeHandle);
     }
 
     wrap.appendChild(labelEl);
