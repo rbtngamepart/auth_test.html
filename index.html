@@ -397,7 +397,7 @@ async function renderPhotoTab(){
   const stage = document.getElementById('photoStage');
   if (!stage) return; // 그 사이 다른 사진으로 넘어갔으면 중단
   stage.style.backgroundImage = `url('${url}')`;
-  stage.innerHTML = '<svg class="line-layer" id="lineLayer"></svg>';
+  stage.innerHTML = '<svg class="line-layer" id="lineLayer" viewBox="0 0 100 100" preserveAspectRatio="none"></svg>';
   drawMarkers(stage, photo, editable);
   drawLabels(stage, photo, editable);
 
@@ -457,10 +457,11 @@ function drawMarkers(stage, photo, editable){
     if (m.box && lineLayer){
       const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
       line.setAttribute('id', `connLine${mi}`);
-      line.setAttribute('x1', m.x+'%'); line.setAttribute('y1', m.y+'%');
-      line.setAttribute('x2', m.box.x+'%'); line.setAttribute('y2', m.box.y+'%');
+      line.setAttribute('x1', m.x); line.setAttribute('y1', m.y);
+      line.setAttribute('x2', m.box.x); line.setAttribute('y2', m.box.y);
       line.setAttribute('stroke', 'rgba(255,255,255,.85)');
       line.setAttribute('stroke-width', '1.5');
+      line.setAttribute('vector-effect', 'non-scaling-stroke');
       line.setAttribute('stroke-dasharray', '3,3');
       lineLayer.appendChild(line);
     }
@@ -523,8 +524,8 @@ function updateConnectingLine_(lineLayer, mi, m){
   if (!lineLayer || !m.box) return;
   const line = lineLayer.querySelector(`#connLine${mi}`);
   if (!line) return;
-  line.setAttribute('x1', m.x+'%'); line.setAttribute('y1', m.y+'%');
-  line.setAttribute('x2', m.box.x+'%'); line.setAttribute('y2', m.box.y+'%');
+  line.setAttribute('x1', m.x); line.setAttribute('y1', m.y);
+  line.setAttribute('x2', m.box.x); line.setAttribute('y2', m.box.y);
 }
 
 // ---- 텍스트박스 안 편집 동작들 ----
