@@ -1272,8 +1272,13 @@ async function ensureEditLockForGame_(gameId){
 }
 
 /** 게임을 여는 동안 접속 신호를 계속 보내고, 다른 사람 접속/잠금 상태를 실시간으로 감시합니다. */
+let lastPresenceRawData_ = []; // 정제 전 원본 접속 기록 (주기적 재평가용)
+let presenceStaleCheckInterval_ = null;
+let currentPresenceGameId_ = null;
+
 function enterPresence_(gameId){
   const email = auth.currentUser.email.toLowerCase();
+  currentPresenceGameId_ = gameId;
   const presenceRef = doc(db, 'games', gameId, 'presence', sanitizeForDocId_(email));
 
   const writePresence = ()=> setDoc(presenceRef, { email, lastSeen: Date.now() }).catch(()=>{});
@@ -1282,15 +1287,14 @@ function enterPresence_(gameId){
 
   // 다른 편집자가 지금 같이 보고 있는지 실시간 감시
   presenceUnsub_ = onSnapshot(collection(db, 'games', gameId, 'presence'), (snap)=>{
-    const now = Date.now();
-    const others = [];
-    snap.forEach(d=>{
-      const data = d.data();
-      if (data.email !== email && (now - data.lastSeen) < PRESENCE_STALE_MS) others.push(data.email);
-    });
-    lastPresenceOthers_ = others;
-    updatePresenceBanner_(others);
+    lastPresenceRawData_ = [];
+    snap.forEach(d=> lastPresenceRawData_.push(d.data()));
+    refreshPresenceBanner_(email);
   });
+
+  // 데이터가 안 바뀌어도(예: 나간 사람이 접속 기록을 못 지우고 탭을 닫은 경우)
+  // 시간이 지나면 유효기간이 끝나는지 주기적으로 다시 확인합니다.
+  presenceStaleCheckInterval_ = setInterval(()=> refreshPresenceBanner_(email), 20000);
 
   // 내가 다른 편집자에게 밀려나서 잠금을 잃었는지 실시간 감시 (즉시 알림)
   lockUnsub_ = onSnapshot(doc(db, 'games', gameId), (snap)=>{
@@ -1305,13 +1309,33 @@ function enterPresence_(gameId){
   });
 }
 
+function refreshPresenceBanner_(myEmail){
+  const now = Date.now();
+  const others = lastPresenceRawData_
+    .filter(d => d.email !== myEmail && (now - d.lastSeen) < PRESENCE_STALE_MS)
+    .map(d => d.email);
+  lastPresenceOthers_ = others;
+  updatePresenceBanner_(others);
+}
+
 function leavePresence_(){
   if (presenceHeartbeatInterval_) clearInterval(presenceHeartbeatInterval_);
+  if (presenceStaleCheckInterval_) clearInterval(presenceStaleCheckInterval_);
   if (presenceUnsub_) presenceUnsub_();
   if (lockUnsub_) lockUnsub_();
-  presenceHeartbeatInterval_ = null; presenceUnsub_ = null; lockUnsub_ = null;
+  presenceHeartbeatInterval_ = null; presenceStaleCheckInterval_ = null;
+  presenceUnsub_ = null; lockUnsub_ = null;
   holdsEditLock_ = false;
   lastPresenceOthers_ = [];
+  lastPresenceRawData_ = [];
+
+  // 내 접속 기록을 바로 지워서, 다른 사람 화면에서도 곧바로 사라지게 합니다.
+  // (지우지 않으면 시간이 지나기 전까지는 "아직 보고 있다"고 계속 남아있게 됩니다)
+  if (currentPresenceGameId_ && auth.currentUser){
+    const email = auth.currentUser.email.toLowerCase();
+    deleteDoc(doc(db, 'games', currentPresenceGameId_, 'presence', sanitizeForDocId_(email))).catch(()=>{});
+    currentPresenceGameId_ = null;
+  }
 }
 
 function updatePresenceBanner_(otherEmails){
