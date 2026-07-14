@@ -98,6 +98,7 @@
   .label-toolbar button{border:none; background:none; font-size:11px; padding:3px 6px; cursor:pointer; border-radius:4px;}
   .label-toolbar button:hover{background:var(--bg);}
   .label-drag{cursor:grab; padding:3px 5px; font-size:11px; color:var(--ink-soft);}
+  .align-guide{position:absolute; background:#ff4444; pointer-events:none; z-index:9;}
   .upload-row{display:flex; align-items:center; gap:10px; margin-bottom:12px;}
 </style>
 </head>
@@ -164,6 +165,7 @@ let currentGameId = null;
 let currentMode = 'photo'; // 'photo' | 'table'
 let currentPhotoIdx = 0;
 let photoUrlCache = {}; // storagePath -> 다운로드 URL (매번 다시 안 구해오게)
+let labelRectsCache_ = []; // 정렬 가이드용: 각 라벨의 실제 화면 위치
 
 // ============================================================
 // 로그인 화면 렌더링
@@ -563,6 +565,33 @@ function drawConnLine_(stage, lineLayer, mi, dot, box){
   line.style.transform = `rotate(${angle}deg)`;
 }
 
+/**
+ * 라벨을 드래그할 때 다른 라벨과 가장자리/중앙이 맞으면 빨간 점선으로 표시합니다.
+ * xPos/yPos가 null이면 해당 방향 가이드를 지웁니다.
+ */
+function renderAlignGuides_(stage, xPos, yPos){
+  let layer = stage.querySelector('#alignGuideLayer');
+  if (!layer){
+    layer = document.createElement('div');
+    layer.id = 'alignGuideLayer';
+    layer.style.cssText = 'position:absolute; inset:0; pointer-events:none; z-index:9;';
+    stage.appendChild(layer);
+  }
+  layer.innerHTML = '';
+  if (xPos != null){
+    const el = document.createElement('div');
+    el.className = 'align-guide';
+    el.style.cssText = `left:${xPos}px; top:0; bottom:0; width:1.5px;`;
+    layer.appendChild(el);
+  }
+  if (yPos != null){
+    const el = document.createElement('div');
+    el.className = 'align-guide';
+    el.style.cssText = `top:${yPos}px; left:0; right:0; height:1.5px;`;
+    layer.appendChild(el);
+  }
+}
+
 // ---- 텍스트박스 안 편집 동작들 ----
 function updateMarkerCaseType(mi, val){
   const g = games.find(x=>x.id===currentGameId);
@@ -628,6 +657,7 @@ function createLabelFromMarker(mi){
 
 function drawLabels(stage, photo, editable){
   stage.querySelectorAll('.label-wrap').forEach(el=>el.remove());
+  labelRectsCache_ = [];
   (photo.labels||[]).forEach((lbl, li)=>{
     const rotation = lbl.rotation || 0;
     const wrap = document.createElement('div');
@@ -653,6 +683,20 @@ function drawLabels(stage, photo, editable){
     rotateGroup.appendChild(labelEl);
     wrap.appendChild(rotateGroup);
     stage.appendChild(wrap); // 실제 위치/크기를 측정하려면 먼저 화면(DOM)에 붙어있어야 함
+
+    // 정렬 가이드용: 이 라벨의 실제 화면 위치를 저장해둡니다.
+    {
+      const stageRectNow = stage.getBoundingClientRect();
+      const groupRectNow = rotateGroup.getBoundingClientRect();
+      labelRectsCache_[li] = {
+        left: groupRectNow.left - stageRectNow.left,
+        top: groupRectNow.top - stageRectNow.top,
+        right: groupRectNow.right - stageRectNow.left,
+        bottom: groupRectNow.bottom - stageRectNow.top,
+        centerX: (groupRectNow.left + groupRectNow.right)/2 - stageRectNow.left,
+        centerY: (groupRectNow.top + groupRectNow.bottom)/2 - stageRectNow.top
+      };
+    }
 
     if (editable){
       labelEl.contentEditable = 'true';
@@ -680,14 +724,45 @@ function drawLabels(stage, photo, editable){
       `;
       toolbar.querySelector('.label-drag').addEventListener('pointerdown', (e)=>{
         e.stopPropagation();
+        const labelSize = labelEl.getBoundingClientRect();
         const move = (ev)=>{
           const rect = stage.getBoundingClientRect();
-          lbl.x = Math.max(0, Math.min(100, (ev.clientX-rect.left)/rect.width*100));
-          lbl.y = Math.max(0, Math.min(100, (ev.clientY-rect.top)/rect.height*100));
-          wrap.style.left = lbl.x+'%';
-          wrap.style.top = lbl.y+'%';
+          let x = (ev.clientX-rect.left)/rect.width*100;
+          let y = (ev.clientY-rect.top)/rect.height*100;
+          x = Math.max(0, Math.min(100, x));
+          y = Math.max(0, Math.min(100, y));
+
+          // ---- 정렬 가이드: 다른 라벨과 가장자리/중앙이 가까우면 딱 맞춰서(스냅) 표시 ----
+          const SNAP_PX = 6;
+          const curLeft = x/100*rect.width, curTop = y/100*rect.height;
+          const curRight = curLeft + labelSize.width, curBottom = curTop + labelSize.height;
+          const curCenterX = curLeft + labelSize.width/2, curCenterY = curTop + labelSize.height/2;
+
+          let bestX = null, bestY = null;
+          labelRectsCache_.forEach((r, idx)=>{
+            if (!r || idx === li) return;
+            [[curLeft, r.left, 0], [curRight, r.right, -labelSize.width], [curCenterX, r.centerX, -labelSize.width/2]].forEach(([cur, target, adj])=>{
+              const diff = Math.abs(cur - target);
+              if (diff < SNAP_PX && (!bestX || diff < bestX.diff)) bestX = { diff, snap: target+adj, guidePos: target };
+            });
+            [[curTop, r.top, 0], [curBottom, r.bottom, -labelSize.height], [curCenterY, r.centerY, -labelSize.height/2]].forEach(([cur, target, adj])=>{
+              const diff = Math.abs(cur - target);
+              if (diff < SNAP_PX && (!bestY || diff < bestY.diff)) bestY = { diff, snap: target+adj, guidePos: target };
+            });
+          });
+          if (bestX) x = (bestX.snap/rect.width)*100;
+          if (bestY) y = (bestY.snap/rect.height)*100;
+
+          lbl.x = x; lbl.y = y;
+          wrap.style.left = x+'%';
+          wrap.style.top = y+'%';
+          renderAlignGuides_(stage, bestX ? bestX.guidePos : null, bestY ? bestY.guidePos : null);
         };
-        const up = ()=>{ window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); };
+        const up = ()=>{
+          window.removeEventListener('pointermove', move);
+          window.removeEventListener('pointerup', up);
+          renderAlignGuides_(stage, null, null);
+        };
         window.addEventListener('pointermove', move);
         window.addEventListener('pointerup', up);
       });
