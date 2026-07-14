@@ -125,6 +125,7 @@
     <button class="btn btn-ghost2" onclick="renderList()">← 목록</button>
     <button class="btn btn-primary2" id="newGameBtn" style="display:none;" onclick="createNewGame()">+ 새 게임</button>
     <button class="btn btn-ghost2" id="dashboardBtn" style="display:none;" onclick="openDashboard()">📊 진행현황</button>
+    <button class="btn btn-ghost2" id="accessBtn" style="display:none;" onclick="openAccessManagement()">🔑 권한 관리</button>
     <button class="btn btn-ghost2" onclick="doLogout()">로그아웃</button>
   </div>
   <div class="app" id="app"></div>
@@ -280,6 +281,8 @@ function updateRoleToggleUI_(){
   if (newBtn) newBtn.style.display = currentRole==='editor' ? 'inline-flex' : 'none';
   const dashBtn = document.getElementById('dashboardBtn');
   if (dashBtn) dashBtn.style.display = currentRole==='editor' ? 'inline-flex' : 'none';
+  const accBtn = document.getElementById('accessBtn');
+  if (accBtn) accBtn.style.display = currentRole==='editor' ? 'inline-flex' : 'none';
 }
 
 /** 뷰어 ↔ 편집자 전환 버튼. 편집자로 전환하면서 지금 보고 있는 게임의 편집 잠금도 함께 확인합니다. */
@@ -368,6 +371,139 @@ async function loadGames(){
   games = [];
   snap.forEach(d => games.push({ id: d.id, ...d.data() }));
   games.sort((a,b)=> String(a.name||'').localeCompare(String(b.name||''), 'ko'));
+}
+
+/**
+ * ============================================================
+ * 권한 관리 (승인 대기 처리, 편집자/뷰어 목록, 매장 관리)
+ * ============================================================
+ */
+const POSITIONS_ = ['점주','점장','매니저','트레이너','버트너','본사'];
+
+async function openAccessManagement(){
+  leavePresence_();
+  currentGameId = null;
+  showDashboard_ = false;
+  appEl.innerHTML = `<p>불러오는 중...</p>`;
+  await renderAccessManagement();
+}
+
+async function renderAccessManagement(){
+  const [pendingSnap, editorsSnap, viewersSnap, storesSnap] = await Promise.all([
+    getDocs(collection(db, 'pending')),
+    getDocs(collection(db, 'editors')),
+    getDocs(collection(db, 'viewers')),
+    getDocs(collection(db, 'stores')),
+  ]);
+  const pending = []; pendingSnap.forEach(d=>pending.push({ email: d.id, ...d.data() }));
+  const editors = []; editorsSnap.forEach(d=>editors.push({ email: d.id, ...d.data() }));
+  const viewers = []; viewersSnap.forEach(d=>viewers.push({ email: d.id, ...d.data() }));
+  const stores = []; storesSnap.forEach(d=>stores.push({ code: d.id, ...d.data() }));
+  stores.sort((a,b)=> String(a.name||'').localeCompare(String(b.name||''), 'ko'));
+
+  const storeName_ = (code)=> stores.find(s=>s.code===code)?.name || code;
+
+  appEl.innerHTML = `
+    <button class="back" onclick="renderList()">← 목록으로</button>
+    <h2 style="margin:0 0 16px;">🔑 권한 관리</h2>
+
+    <h3 style="font-size:14px;">승인 대기 (${pending.length})</h3>
+    ${pending.length ? pending.map(p=>`
+      <div style="display:flex; align-items:center; gap:10px; padding:10px 0; border-bottom:1px solid var(--line); flex-wrap:wrap;">
+        <div style="flex:1; min-width:180px;">
+          <div style="font-weight:700; font-size:13px;">${p.name||'-'} · ${p.position||'-'}</div>
+          <div style="font-size:11.5px; color:var(--ink-soft);">${storeName_(p.storeCode)} · ${p.email}</div>
+        </div>
+        <button class="btn btn-primary2" style="width:auto; padding:5px 10px; font-size:12px;" onclick="approveRequest('${p.email}','editor')">편집자로 승인</button>
+        <button class="btn btn-ghost2" style="width:auto; padding:5px 10px; font-size:12px;" onclick="approveRequest('${p.email}','viewer')">뷰어로 승인</button>
+        <button class="btn btn-ghost2" style="width:auto; padding:5px 10px; font-size:12px;" onclick="rejectRequest('${p.email}')">거절</button>
+      </div>
+    `).join('') : `<p style="font-size:12.5px; color:var(--ink-soft);">대기 중인 요청이 없습니다.</p>`}
+
+    <h3 style="font-size:14px; margin-top:24px;">직접 등록</h3>
+    <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:20px;">
+      <input type="text" id="directEmailInput" placeholder="이메일 주소" style="flex:1; min-width:200px; padding:8px 10px; border:1px solid var(--line); border-radius:7px; font-size:13px;">
+      <button class="btn btn-primary2" style="width:auto;" onclick="addDirectAccess('editor')">편집자로 등록</button>
+      <button class="btn btn-ghost2" style="width:auto;" onclick="addDirectAccess('viewer')">뷰어로 등록</button>
+    </div>
+
+    <h3 style="font-size:14px;">편집자 (${editors.length})</h3>
+    <div style="margin-bottom:20px;">
+      ${editors.map(e=>`
+        <div style="display:flex; justify-content:space-between; align-items:center; padding:6px 0; border-bottom:1px solid var(--line); font-size:12.5px;">
+          <span>${e.name ? `${e.name} · ` : ''}${e.email}</span>
+          <button class="btn btn-ghost2" style="width:auto; padding:4px 8px; font-size:11.5px;" onclick="removeAccess('${e.email}','editors')">제거</button>
+        </div>
+      `).join('') || `<p style="font-size:12.5px; color:var(--ink-soft);">없음</p>`}
+    </div>
+
+    <h3 style="font-size:14px;">뷰어 (${viewers.length})</h3>
+    <div style="margin-bottom:20px;">
+      ${viewers.map(v=>`
+        <div style="display:flex; justify-content:space-between; align-items:center; padding:6px 0; border-bottom:1px solid var(--line); font-size:12.5px;">
+          <span>${v.name ? `${v.name} · ${storeName_(v.storeCode)} · ` : ''}${v.email}</span>
+          <button class="btn btn-ghost2" style="width:auto; padding:4px 8px; font-size:11.5px;" onclick="removeAccess('${v.email}','viewers')">제거</button>
+        </div>
+      `).join('') || `<p style="font-size:12.5px; color:var(--ink-soft);">없음</p>`}
+    </div>
+
+    <h3 style="font-size:14px;">매장 관리 (${stores.length})</h3>
+    <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:10px;">
+      <input type="text" id="storeCodeInput" placeholder="매장 코드" style="width:140px; padding:8px 10px; border:1px solid var(--line); border-radius:7px; font-size:13px;">
+      <input type="text" id="storeNameInput" placeholder="매장 이름" style="flex:1; min-width:140px; padding:8px 10px; border:1px solid var(--line); border-radius:7px; font-size:13px;">
+      <button class="btn btn-primary2" style="width:auto;" onclick="addStore()">추가</button>
+    </div>
+    <div style="max-height:240px; overflow-y:auto;">
+      ${stores.map(s=>`
+        <div style="display:flex; justify-content:space-between; align-items:center; padding:6px 0; border-bottom:1px solid var(--line); font-size:12.5px;">
+          <span>${s.name} <span style="color:var(--ink-soft); font-family:var(--mono); font-size:11px;">${s.code}</span></span>
+          <button class="btn btn-ghost2" style="width:auto; padding:4px 8px; font-size:11.5px;" onclick="removeStore('${s.code}')">삭제</button>
+        </div>
+      `).join('') || `<p style="font-size:12.5px; color:var(--ink-soft);">없음</p>`}
+    </div>
+  `;
+}
+
+async function approveRequest(email, role){
+  const pendingSnap = await getDoc(doc(db, 'pending', email));
+  const profile = pendingSnap.data() || {};
+  await setDoc(doc(db, role === 'editor' ? 'editors' : 'viewers', email), { ...profile, approvedAt: Date.now() });
+  await deleteDoc(doc(db, 'pending', email));
+  renderAccessManagement();
+}
+
+async function rejectRequest(email){
+  if (!confirm(`${email} 요청을 거절할까요?`)) return;
+  await deleteDoc(doc(db, 'pending', email));
+  renderAccessManagement();
+}
+
+async function addDirectAccess(role){
+  const input = document.getElementById('directEmailInput');
+  const email = input.value.trim().toLowerCase();
+  if (!email || !email.includes('@')){ alert('올바른 이메일을 입력해주세요.'); return; }
+  await setDoc(doc(db, role === 'editor' ? 'editors' : 'viewers', email), { addedAt: Date.now() });
+  renderAccessManagement();
+}
+
+async function removeAccess(email, collectionName){
+  if (!confirm(`${email}님의 권한을 제거할까요?`)) return;
+  await deleteDoc(doc(db, collectionName, email));
+  renderAccessManagement();
+}
+
+async function addStore(){
+  const code = document.getElementById('storeCodeInput').value.trim();
+  const name = document.getElementById('storeNameInput').value.trim();
+  if (!code || !name){ alert('매장 코드와 이름을 모두 입력해주세요.'); return; }
+  await setDoc(doc(db, 'stores', code), { name });
+  renderAccessManagement();
+}
+
+async function removeStore(code){
+  if (!confirm('이 매장을 삭제할까요?')) return;
+  await deleteDoc(doc(db, 'stores', code));
+  renderAccessManagement();
 }
 
 let showDashboard_ = false;
@@ -1588,7 +1724,8 @@ Object.assign(window, {
   showHistoryModal_, restoreHistory_,
   setListSearch, setListSort, toggleWorkComplete, deleteGame,
   toggleGuideDone, updateGameNote,
-  openDashboard, closeDashboard, setDashboardFilter, toggleGuideDoneFor
+  openDashboard, closeDashboard, setDashboardFilter, toggleGuideDoneFor,
+  openAccessManagement, approveRequest, rejectRequest, addDirectAccess, removeAccess, addStore, removeStore
 });
 
 // ============================================================
