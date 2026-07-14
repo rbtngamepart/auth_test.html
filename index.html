@@ -62,6 +62,16 @@
   .photo-nav{display:flex; align-items:center; gap:10px; margin-bottom:10px;}
   .marker{position:absolute; width:14px; height:14px; border-radius:50%; background:var(--accent); border:2px solid #fff; box-shadow:0 1px 4px rgba(0,0,0,.5); transform:translate(-50%,-50%); cursor:grab;}
   .marker:active{cursor:grabbing;}
+  .anno-box{position:absolute; background:rgba(255,255,255,.97); border:1px solid var(--line); border-radius:8px; padding:8px; min-width:150px; max-width:220px; box-shadow:0 3px 12px rgba(0,0,0,.25); font-size:11.5px; cursor:grab;}
+  .anno-box:active{cursor:grabbing;}
+  .anno-head{display:flex; align-items:center; gap:6px; margin-bottom:6px;}
+  .anno-head select{font-family:var(--mono); font-weight:800; font-size:12px; padding:2px 4px; border:1px solid var(--line); border-radius:5px;}
+  .anno-del{margin-left:auto; background:none; border:none; color:var(--ink-soft); cursor:pointer; font-size:13px; padding:0 2px;}
+  .anno-item{display:flex; gap:4px; margin-bottom:3px;}
+  .anno-item input[type=text]{flex:1; min-width:0; padding:3px 5px; font-size:11px; border:1px solid var(--line); border-radius:4px;}
+  .anno-item input[type=number]{width:42px; padding:3px 4px; font-size:11px; border:1px solid var(--line); border-radius:4px;}
+  .anno-item button{background:none; border:none; color:var(--ink-soft); cursor:pointer; font-size:11px; padding:0 2px;}
+  .anno-additem{font-size:10.5px; color:var(--accent); background:none; border:none; cursor:pointer; padding:2px 0; font-weight:700;}
   .upload-row{display:flex; align-items:center; gap:10px; margin-bottom:12px;}
 </style>
 </head>
@@ -315,10 +325,14 @@ function openGame(id){
 function renderDetail(){
   const g = games.find(x=>x.id===currentGameId);
   if (!g){ renderList(); return; }
+  const editable = currentRole === 'editor';
 
   appEl.innerHTML = `
     <button class="back" onclick="renderList()">← 목록으로</button>
-    <h2 style="margin:0 0 16px;">${g.name}</h2>
+    <div style="display:flex; align-items:center; gap:10px; margin-bottom:16px;">
+      <h2 style="margin:0;">${g.name}</h2>
+      ${editable ? `<button class="btn btn-primary2" style="width:auto; padding:6px 14px; font-size:12.5px;" onclick="saveGame()">💾 저장</button>` : ''}
+    </div>
     <div class="tabs">
       <button class="${currentMode==='photo'?'active':''}" onclick="switchMode('photo')">사진</button>
       <button class="${currentMode==='table'?'active':''}" onclick="switchMode('table')">표</button>
@@ -368,7 +382,7 @@ async function renderPhotoTab(){
     <div class="photo-stage" id="photoStage">
       <div style="position:absolute; inset:0; display:flex; align-items:center; justify-content:center; color:#999; font-size:12px;">불러오는 중...</div>
     </div>
-    ${editable ? `<p style="margin-top:8px; font-size:11.5px;">사진의 빈 곳을 더블클릭하면 새 마커가 추가됩니다. 마커는 드래그로 옮길 수 있습니다.</p>` : ''}
+    ${editable ? `<p style="margin-top:8px; font-size:11.5px;">사진의 빈 곳을 더블클릭하면 새 마커와 텍스트박스가 추가됩니다. 마커와 텍스트박스는 각각 드래그로 옮길 수 있고, 텍스트박스 안에서 케이스종류·구성품·수량을 바로 수정할 수 있습니다.</p>` : ''}
   `;
 
   const url = await resolvePhotoUrl_(photo.storagePath);
@@ -384,18 +398,23 @@ async function renderPhotoTab(){
       const rect = stage.getBoundingClientRect();
       const x = (e.clientX-rect.left)/rect.width*100;
       const y = (e.clientY-rect.top)/rect.height*100;
+      const boxX = x < 60 ? Math.min(97, x+8) : Math.max(3, x-8);
+      const boxY = Math.max(5, Math.min(90, y-4));
       g.cases = g.cases || [];
       g.cases.push({ caseType:'A', items:[{name:'새 구성품', qty:1}] });
       photo.markers = photo.markers || [];
-      photo.markers.push({ x, y, caseIdx: g.cases.length-1 });
+      photo.markers.push({ x, y, caseIdx: g.cases.length-1, box:{x:boxX, y:boxY} });
       drawMarkers(stage, photo, editable);
     };
   }
 }
 
 function drawMarkers(stage, photo, editable){
-  stage.querySelectorAll('.marker').forEach(el=>el.remove());
+  const g = games.find(x=>x.id===currentGameId);
+  stage.querySelectorAll('.marker, .anno-box').forEach(el=>el.remove());
+
   (photo.markers||[]).forEach((m, mi)=>{
+    // ---- 마커(점) ----
     const dot = document.createElement('div');
     dot.className = 'marker';
     dot.style.left = m.x+'%';
@@ -417,7 +436,103 @@ function drawMarkers(stage, photo, editable){
       });
     }
     stage.appendChild(dot);
+
+    // ---- 텍스트박스(케이스 정보 패널) ----
+    if (!m.box) return; // 구버전 마커(박스 없이 만들어진 것)는 패널 없이 점만 표시
+    const c = g.cases[m.caseIdx];
+    if (!c) return;
+
+    const box = document.createElement('div');
+    box.className = 'anno-box';
+    box.style.left = m.box.x+'%';
+    box.style.top = m.box.y+'%';
+
+    if (editable){
+      box.innerHTML = `
+        <div class="anno-head">
+          <select onchange="updateMarkerCaseType(${mi}, this.value)">${CASE_TYPES.map(t=>`<option value="${t}" ${t===c.caseType?'selected':''}>${t}</option>`).join('')}</select>
+          <button class="anno-del" title="이 마커/케이스 삭제" onclick="removeMarkerCase(${mi})">✕</button>
+        </div>
+        <div id="annoItems${mi}">
+          ${(c.items||[]).map((it, ii)=>`
+            <div class="anno-item">
+              <input type="text" value="${it.name||''}" placeholder="구성품명" onchange="updateMarkerItem(${mi},${ii},'name',this.value)">
+              <input type="number" value="${it.qty||0}" onchange="updateMarkerItem(${mi},${ii},'qty',this.value)">
+              <button onclick="deleteMarkerItem(${mi},${ii})">✕</button>
+            </div>
+          `).join('')}
+        </div>
+        <button class="anno-additem" onclick="addMarkerItem(${mi})">+ 항목 추가</button>
+      `;
+      // 박스 자체를 드래그로 옮기기 (입력창/버튼 클릭은 제외)
+      box.addEventListener('pointerdown', (e)=>{
+        if (['INPUT','BUTTON','SELECT','OPTION'].includes(e.target.tagName)) return;
+        e.stopPropagation();
+        const move = (ev)=>{
+          const rect = stage.getBoundingClientRect();
+          m.box.x = Math.max(0, Math.min(100, (ev.clientX-rect.left)/rect.width*100));
+          m.box.y = Math.max(0, Math.min(100, (ev.clientY-rect.top)/rect.height*100));
+          box.style.left = m.box.x+'%';
+          box.style.top = m.box.y+'%';
+        };
+        const up = ()=>{ window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); };
+        window.addEventListener('pointermove', move);
+        window.addEventListener('pointerup', up);
+      });
+    } else {
+      box.innerHTML = `
+        <div class="anno-head"><span class="case-badge case-${c.caseType}" style="font-size:11px; padding:2px 6px;">${c.caseType}</span></div>
+        ${(c.items||[]).map(it=>`<div style="margin-bottom:2px;">${it.name||''}${it.qty?` <span style="color:var(--ink-soft);">${it.qty}개</span>`:''}</div>`).join('')}
+      `;
+    }
+    stage.appendChild(box);
   });
+}
+
+// ---- 텍스트박스 안 편집 동작들 ----
+function updateMarkerCaseType(mi, val){
+  const g = games.find(x=>x.id===currentGameId);
+  const photo = g.photos[currentPhotoIdx];
+  g.cases[photo.markers[mi].caseIdx].caseType = val;
+  redrawCurrentPhoto_();
+}
+function updateMarkerItem(mi, ii, field, val){
+  const g = games.find(x=>x.id===currentGameId);
+  const photo = g.photos[currentPhotoIdx];
+  g.cases[photo.markers[mi].caseIdx].items[ii][field] = field==='qty' ? Number(val) : val;
+}
+function addMarkerItem(mi){
+  const g = games.find(x=>x.id===currentGameId);
+  const photo = g.photos[currentPhotoIdx];
+  g.cases[photo.markers[mi].caseIdx].items.push({name:'', qty:1});
+  redrawCurrentPhoto_();
+}
+function deleteMarkerItem(mi, ii){
+  const g = games.find(x=>x.id===currentGameId);
+  const photo = g.photos[currentPhotoIdx];
+  const items = g.cases[photo.markers[mi].caseIdx].items;
+  items.splice(ii, 1);
+  if (items.length === 0) items.push({name:'', qty:1}); // 최소 한 줄은 유지 (완전히 비면 편집이 어려움)
+  redrawCurrentPhoto_();
+}
+function removeMarkerCase(mi){
+  if (!confirm('이 마커와 케이스를 삭제할까요?')) return;
+  const g = games.find(x=>x.id===currentGameId);
+  const photo = g.photos[currentPhotoIdx];
+  const caseIdx = photo.markers[mi].caseIdx;
+  photo.markers.splice(mi, 1);
+  g.cases.splice(caseIdx, 1);
+  // 뒤에 있던 케이스들의 인덱스가 하나씩 당겨지므로, 모든 사진의 마커 참조를 보정합니다.
+  g.photos.forEach(p=>{
+    (p.markers||[]).forEach(m=>{ if (m.caseIdx > caseIdx) m.caseIdx--; });
+  });
+  redrawCurrentPhoto_();
+}
+function redrawCurrentPhoto_(){
+  const g = games.find(x=>x.id===currentGameId);
+  const photo = g.photos[currentPhotoIdx];
+  const stage = document.getElementById('photoStage');
+  if (stage) drawMarkers(stage, photo, currentRole==='editor');
 }
 
 async function resolvePhotoUrl_(storagePath){
@@ -504,9 +619,8 @@ function renderTableTab(){
       <tbody>${rows || `<tr><td colspan="4" style="color:var(--ink-soft);">등록된 케이스가 없습니다.</td></tr>`}</tbody>
     </table>
     ${editable ? `
-      <div style="margin-top:14px; display:flex; gap:8px;">
+      <div style="margin-top:14px;">
         <button class="btn btn-ghost2" style="width:auto;" onclick="addCase()">+ 케이스 추가</button>
-        <button class="btn btn-primary2" style="width:auto;" onclick="saveGame()">💾 저장</button>
       </div>
     ` : ''}
   `;
@@ -544,7 +658,8 @@ async function saveGame(){
 Object.assign(window, {
   renderList, openGame, createNewGame, switchMode,
   prevPhoto, nextPhoto, uploadPhoto, deletePhoto,
-  addCase, updateCaseType, updateItem, deleteItem, saveGame, doLogout
+  addCase, updateCaseType, updateItem, deleteItem, saveGame, doLogout,
+  updateMarkerCaseType, updateMarkerItem, addMarkerItem, deleteMarkerItem, removeMarkerCase
 });
 
 // ============================================================
