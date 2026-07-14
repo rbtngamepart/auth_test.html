@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>레드버튼 오거나이징 가이드 (Firebase 로그인 테스트)</title>
+<style>
+  :root{
+    --bg: #F6F6F3;
+    --surface: #FFFFFF;
+    --ink: #1B1C1A;
+    --ink-soft: #63645F;
+    --line: #E3E3DE;
+    --accent: #E4141B;
+    --accent-soft: #FCE9E8;
+    --danger: #B3492B;
+    --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Pretendard', 'Malgun Gothic', sans-serif;
+  }
+  *{box-sizing:border-box;}
+  body{margin:0; background:var(--bg); color:var(--ink); font-family:var(--sans); line-height:1.5;}
+  .login-gate{position:fixed; inset:0; background:var(--bg); display:flex; align-items:center; justify-content:center; z-index:200; padding:20px;}
+  .login-gate-box{background:var(--surface); border:1px solid var(--line); border-radius:16px; padding:36px 32px; max-width:360px; width:100%; text-align:center; box-shadow:0 8px 30px rgba(0,0,0,.08);}
+  .brand{font-weight:900; font-size:22px; letter-spacing:-0.03em; text-transform:uppercase; color:var(--accent); margin-bottom:16px;}
+  .brand .r-mark{font-size:10px; vertical-align:super; margin-left:1px;}
+  p{font-size:13px; color:var(--ink-soft); line-height:1.6; margin:0;}
+  .btn{display:inline-flex; align-items:center; justify-content:center; gap:8px; border:none; border-radius:8px; padding:11px 18px; font-size:13.5px; font-weight:700; cursor:pointer; font-family:var(--sans); width:100%; margin-top:16px;}
+  .btn-google{background:#fff; color:#3c4043; border:1px solid #dadce0;}
+  .btn-google:hover{background:#f8f8f8;}
+  .btn-ghost{background:none; color:var(--ink-soft); text-decoration:underline;}
+  .field{margin-bottom:12px; text-align:left;}
+  .field label{display:block; font-size:12px; font-weight:700; margin-bottom:4px; color:var(--ink-soft);}
+  .field input, .field select{width:100%; padding:9px 10px; border:1px solid var(--line); border-radius:7px; font-size:13.5px; font-family:var(--sans);}
+  .error-box{display:none; color:var(--danger); font-size:12.5px; margin-top:10px; text-align:center;}
+  .success-box{background:var(--accent-soft); color:var(--accent); border-radius:8px; padding:14px; font-size:13px; margin-top:16px; text-align:left;}
+  code{background:var(--bg); padding:1px 5px; border-radius:4px; font-size:12px;}
+</style>
+</head>
+<body>
+
+<div class="login-gate">
+  <div class="login-gate-box" id="gateContent">
+    <div class="brand">RED BUTTON<span class="r-mark">®</span></div>
+    <p>불러오는 중...</p>
+  </div>
+</div>
+
+<!-- Firebase SDK (CDN, 모듈 방식) -->
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+import {
+  getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged
+} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+import {
+  getFirestore, doc, getDoc, setDoc, collection, getDocs
+} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+
+// ============================================================
+// Firebase 설정 (프로젝트 설정 > 내 앱 에서 복사한 값)
+// ============================================================
+const firebaseConfig = {
+  apiKey: "AIzaSyAQmukoq1izvjFjxK-TVWG-1GMCPrvjLdk",
+  authDomain: "redbutton-organizing-guide.firebaseapp.com",
+  projectId: "redbutton-organizing-guide",
+  storageBucket: "redbutton-organizing-guide.firebasestorage.app",
+  messagingSenderId: "503497098724",
+  appId: "1:503497098724:web:e97a10fdd5d2941797b3f1"
+};
+
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+const provider = new GoogleAuthProvider();
+
+const POSITIONS = ['점주','점장','매니저','트레이너','버트너','본사'];
+const gateContent = document.getElementById('gateContent');
+
+// ============================================================
+// 화면 상태별 렌더링
+// ============================================================
+function renderLoginButton(){
+  gateContent.innerHTML = `
+    <div class="brand">RED BUTTON<span class="r-mark">®</span></div>
+    <p>레드버튼 오거나이징 가이드는 사내 전용 자료입니다.<br>구글 계정으로 로그인해주세요.</p>
+    <button class="btn btn-google" id="googleLoginBtn">
+      <svg width="18" height="18" viewBox="0 0 18 18"><path fill="#4285F4" d="M17.64 9.2c0-.64-.06-1.25-.16-1.84H9v3.48h4.84c-.21 1.13-.85 2.09-1.81 2.73v2.27h2.93c1.71-1.58 2.69-3.9 2.69-6.64z"/><path fill="#34A853" d="M9 18c2.43 0 4.47-.8 5.96-2.18l-2.93-2.27c-.81.54-1.85.86-3.03.86-2.33 0-4.3-1.57-5-3.68H1.02v2.34C2.5 15.98 5.52 18 9 18z"/><path fill="#FBBC05" d="M4 10.72c-.18-.54-.28-1.12-.28-1.72s.1-1.18.28-1.72V4.94H1.02C.37 6.22 0 7.57 0 9s.37 2.78 1.02 4.06L4 10.72z"/><path fill="#EA4335" d="M9 3.58c1.32 0 2.51.45 3.44 1.35l2.59-2.59C13.46.89 11.43 0 9 0 5.52 0 2.5 2.02 1.02 4.94L4 7.28C4.7 5.17 6.67 3.58 9 3.58z"/></svg>
+      Google로 로그인
+    </button>
+    <div class="error-box" id="errorBox"></div>
+  `;
+  document.getElementById('googleLoginBtn').addEventListener('click', handleGoogleLogin);
+}
+
+function renderChecking(){
+  gateContent.innerHTML = `
+    <div class="brand">RED BUTTON<span class="r-mark">®</span></div>
+    <p>로그인 확인 중...</p>
+  `;
+}
+
+function renderPending(email, isNew){
+  gateContent.innerHTML = `
+    <div class="brand">RED BUTTON<span class="r-mark">®</span></div>
+    <p style="margin-top:10px;">${isNew ? '접근 권한 요청이 접수되었습니다.' : '아직 승인 대기 중입니다.'}<br>담당자의 승인 후 이용하실 수 있습니다.</p>
+    <p style="margin-top:14px; font-size:12px;">로그인 계정: ${email}</p>
+    <button class="btn btn-ghost" id="logoutBtn2">다른 계정으로 로그인</button>
+  `;
+  document.getElementById('logoutBtn2').addEventListener('click', ()=>signOut(auth));
+}
+
+async function renderProfileForm(email){
+  gateContent.innerHTML = `
+    <div class="brand">RED BUTTON<span class="r-mark">®</span></div>
+    <p style="margin-bottom:14px;">처음 로그인하셨네요. 접근 요청을 위해<br>아래 정보를 입력해주세요.</p>
+    <div id="profileFormBody"><p>불러오는 중...</p></div>
+  `;
+
+  // stores 컬렉션에서 매장 목록을 가져옵니다. (아직 데이터 이전 전이면 비어있을 수 있음)
+  let stores = [];
+  try{
+    const snap = await getDocs(collection(db, 'stores'));
+    snap.forEach(d => stores.push({ code: d.id, name: d.data().name }));
+  }catch(e){ console.error(e); }
+  stores.sort((a,b)=> String(a.name).localeCompare(String(b.name), 'ko'));
+
+  document.getElementById('profileFormBody').innerHTML = `
+    <div class="field">
+      <label>매장</label>
+      <select id="storeSelect">
+        <option value="">매장을 선택하세요</option>
+        ${stores.map(s=>`<option value="${s.code}">${s.name}</option>`).join('')}
+      </select>
+    </div>
+    <div class="field">
+      <label>이름</label>
+      <input type="text" id="nameInput" placeholder="홍길동">
+    </div>
+    <div class="field">
+      <label>직급</label>
+      <select id="positionSelect">
+        <option value="">직급을 선택하세요</option>
+        ${POSITIONS.map(p=>`<option value="${p}">${p}</option>`).join('')}
+      </select>
+    </div>
+    <div class="error-box" id="profileErrorBox"></div>
+    <button class="btn btn-google" id="submitProfileBtn" style="background:var(--accent); color:#fff; border:none;">제출</button>
+  `;
+  document.getElementById('submitProfileBtn').addEventListener('click', ()=>submitProfile(email));
+}
+
+function renderApproved(email, role){
+  // 이번 단계(로그인 테스트)에서는 실제 앱 화면 대신 성공 확인만 표시합니다.
+  // 다음 단계에서 여기를 실제 게임 목록 화면으로 교체합니다.
+  gateContent.innerHTML = `
+    <div class="brand">RED BUTTON<span class="r-mark">®</span></div>
+    <div class="success-box">
+      ✅ 로그인 성공!<br><br>
+      <b>계정:</b> ${email}<br>
+      <b>권한:</b> ${role === 'editor' ? '편집자' : '뷰어'}
+    </div>
+    <p style="margin-top:14px; font-size:11.5px;">이건 로그인만 확인하는 테스트 화면입니다.<br>다음 단계에서 실제 게임 목록 화면을 이어 붙입니다.</p>
+    <button class="btn btn-ghost" id="logoutBtn3">로그아웃</button>
+  `;
+  document.getElementById('logoutBtn3').addEventListener('click', ()=>signOut(auth));
+}
+
+// ============================================================
+// 로그인 처리
+// ============================================================
+async function handleGoogleLogin(){
+  try{
+    await signInWithPopup(auth, provider);
+    // 로그인 성공하면 onAuthStateChanged가 알아서 다음 화면을 그려줍니다.
+  }catch(e){
+    console.error(e);
+    const box = document.getElementById('errorBox');
+    if (box){ box.style.display='block'; box.textContent = '로그인에 실패했습니다. 다시 시도해주세요.'; }
+  }
+}
+
+async function checkAccessAndRender(user){
+  const email = user.email.toLowerCase().trim();
+  renderChecking();
+
+  const [editorSnap, viewerSnap, pendingSnap] = await Promise.all([
+    getDoc(doc(db, 'editors', email)),
+    getDoc(doc(db, 'viewers', email)),
+    getDoc(doc(db, 'pending', email)),
+  ]);
+
+  if (editorSnap.exists()) return renderApproved(email, 'editor');
+  if (viewerSnap.exists()) return renderApproved(email, 'viewer');
+  if (pendingSnap.exists()) return renderPending(email, false);
+  return renderProfileForm(email);
+}
+
+async function submitProfile(email){
+  const storeCode = document.getElementById('storeSelect').value;
+  const name = document.getElementById('nameInput').value.trim();
+  const position = document.getElementById('positionSelect').value;
+  const errorBox = document.getElementById('profileErrorBox');
+
+  if (!storeCode || !name || !position){
+    errorBox.style.display = 'block';
+    errorBox.textContent = '매장, 이름, 직급을 모두 입력해주세요.';
+    return;
+  }
+
+  await setDoc(doc(db, 'pending', email), {
+    name, position, storeCode,
+    requestedAt: Date.now()
+  });
+
+  renderPending(email, true);
+}
+
+// ============================================================
+// 로그인 상태 감시 (새로고침해도 로그인 유지됨)
+// ============================================================
+onAuthStateChanged(auth, (user)=>{
+  if (user) checkAccessAndRender(user);
+  else renderLoginButton();
+});
+</script>
+</body>
+</html>
