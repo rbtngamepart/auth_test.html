@@ -126,6 +126,7 @@
     <button class="btn btn-primary2" id="newGameBtn" style="display:none;" onclick="createNewGame()">+ 새 게임</button>
     <button class="btn btn-ghost2" id="dashboardBtn" style="display:none;" onclick="openDashboard()">📊 진행현황</button>
     <button class="btn btn-ghost2" id="accessBtn" style="display:none;" onclick="openAccessManagement()">🔑 권한 관리</button>
+    <button class="btn btn-ghost2" id="migrateBtn" style="display:none;" onclick="openMigrationTool()">📥 데이터 가져오기</button>
     <button class="btn btn-ghost2" onclick="doLogout()">로그아웃</button>
   </div>
   <div class="app" id="app"></div>
@@ -283,6 +284,8 @@ function updateRoleToggleUI_(){
   if (dashBtn) dashBtn.style.display = currentRole==='editor' ? 'inline-flex' : 'none';
   const accBtn = document.getElementById('accessBtn');
   if (accBtn) accBtn.style.display = currentRole==='editor' ? 'inline-flex' : 'none';
+  const migBtn = document.getElementById('migrateBtn');
+  if (migBtn) migBtn.style.display = currentRole==='editor' ? 'inline-flex' : 'none';
 }
 
 /** 뷰어 ↔ 편집자 전환 버튼. 편집자로 전환하면서 지금 보고 있는 게임의 편집 잠금도 함께 확인합니다. */
@@ -504,6 +507,140 @@ async function removeStore(code){
   if (!confirm('이 매장을 삭제할까요?')) return;
   await deleteDoc(doc(db, 'stores', code));
   renderAccessManagement();
+}
+
+/**
+ * ============================================================
+ * 기존 시스템(Apps Script + 드라이브) 데이터 가져오기
+ * ============================================================
+ * Apps Script에서 exportAllDataForMigration_ 함수로 내보낸 JSON 파일을
+ * 업로드하면, 사진은 Storage에 올리고 나머지 데이터는 Firestore에 씁니다.
+ */
+function openMigrationTool(){
+  leavePresence_();
+  currentGameId = null;
+  showDashboard_ = false;
+  appEl.innerHTML = `
+    <button class="back" onclick="renderList()">← 목록으로</button>
+    <h2 style="margin:0 0 10px;">📥 데이터 가져오기</h2>
+    <p style="font-size:12.5px; color:var(--ink-soft); max-width:520px;">
+      기존 시스템(Apps Script)에서 <code>exportAllDataForMigration_</code> 함수를 실행해서 만든
+      내보내기 파일들(<code>firebase_migration_meta_...json</code>, <code>firebase_migration_games_...json</code> 여러 개)을
+      전부 다운로드한 뒤, 아래에서 <b>한꺼번에 여러 개 선택</b>해주세요. 게임 수가 많으면 시간이 꽤 걸릴 수 있습니다 — 창을 닫지 말고 기다려주세요.
+    </p>
+    <input type="file" id="migrationFileInput" accept="application/json" multiple style="margin:14px 0;">
+    <div>
+      <button class="btn btn-primary2" style="width:auto;" onclick="startMigration_()">가져오기 시작</button>
+    </div>
+    <div id="migrationLog" style="margin-top:16px; font-size:12.5px; font-family:var(--mono); white-space:pre-wrap; background:var(--surface); border:1px solid var(--line); border-radius:8px; padding:14px; max-height:400px; overflow-y:auto;"></div>
+  `;
+}
+
+function migLog_(msg){
+  const el = document.getElementById('migrationLog');
+  if (el) el.textContent += msg + '\n';
+  if (el) el.scrollTop = el.scrollHeight;
+}
+
+function dataURLtoBlob_(dataUrl){
+  const parts = dataUrl.split(',');
+  const mimeMatch = parts[0].match(/:(.*?);/);
+  const mime = mimeMatch ? mimeMatch[1] : 'image/jpeg';
+  const binary = atob(parts[1]);
+  const array = new Uint8Array(binary.length);
+  for (let i=0; i<binary.length; i++) array[i] = binary.charCodeAt(i);
+  return new Blob([array], { type: mime });
+}
+
+async function startMigration_(){
+  const input = document.getElementById('migrationFileInput');
+  const files = Array.from(input.files || []);
+  if (!files.length){ alert('파일을 선택해주세요.'); return; }
+
+  // 선택된 파일들을 전부 읽어서, "메타(계정/매장)"와 "게임 묶음"들을 하나로 합칩니다.
+  let merged = { editors: [], viewers: [], pending: [], stores: [], profiles: {}, games: [] };
+  for (const file of files){
+    try{
+      const text = await file.text();
+      const data = JSON.parse(text);
+      if (data.editors) merged.editors.push(...data.editors);
+      if (data.viewers) merged.viewers.push(...data.viewers);
+      if (data.pending) merged.pending.push(...data.pending);
+      if (data.stores) merged.stores.push(...data.stores);
+      if (data.profiles) Object.assign(merged.profiles, data.profiles);
+      if (data.games) merged.games.push(...data.games);
+    }catch(e){
+      migLog_(`❌ 파일을 읽지 못했습니다: ${file.name}`);
+      return;
+    }
+  }
+  const data = merged;
+
+  migLog_(`불러온 파일 ${files.length}개: 게임 ${data.games.length}개, 편집자 ${data.editors.length}명, 뷰어 ${data.viewers.length}명, 매장 ${data.stores.length}개`);
+  if (!confirm('가져오기를 시작할까요? 시간이 걸릴 수 있습니다.')) return;
+
+  // ---- 1) 매장 ----
+  migLog_('\n[1/4] 매장 정보 등록 중...');
+  for (const s of data.stores){
+    try{ await setDoc(doc(db, 'stores', s.code), { name: s.name }); }
+    catch(e){ migLog_(`  ⚠ 매장 등록 실패: ${s.code} - ${e.message}`); }
+  }
+  migLog_(`  완료 (${data.stores.length}개)`);
+
+  // ---- 2) 편집자/뷰어/대기 ----
+  migLog_('\n[2/4] 편집자·뷰어 계정 등록 중...');
+  const profiles = data.profiles;
+  for (const email of data.editors){
+    try{ await setDoc(doc(db, 'editors', email), { ...(profiles[email]||{}), addedAt: Date.now() }); }
+    catch(e){ migLog_(`  ⚠ 편집자 등록 실패: ${email}`); }
+  }
+  for (const email of data.viewers){
+    try{ await setDoc(doc(db, 'viewers', email), { ...(profiles[email]||{}), addedAt: Date.now() }); }
+    catch(e){ migLog_(`  ⚠ 뷰어 등록 실패: ${email}`); }
+  }
+  for (const email of data.pending){
+    try{ await setDoc(doc(db, 'pending', email), { ...(profiles[email]||{}), requestedAt: Date.now() }); }
+    catch(e){ migLog_(`  ⚠ 대기 등록 실패: ${email}`); }
+  }
+  migLog_(`  완료 (편집자 ${data.editors.length}명, 뷰어 ${data.viewers.length}명, 대기 ${data.pending.length}명)`);
+
+  // ---- 3) 게임 (사진은 Storage로) ----
+  migLog_('\n[3/4] 게임 데이터 가져오는 중...');
+  const games_ = data.games;
+  for (let i=0; i<games_.length; i++){
+    const g = games_[i];
+    try{
+      const photos = [];
+      for (const p of (g.photos||[])){
+        const newPhoto = { markers: p.markers||[], labels: p.labels||[] };
+        if (p.imageUrl && p.imageUrl.startsWith('data:')){
+          const blob = dataURLtoBlob_(p.imageUrl);
+          const storagePath = `games/${g.id}/${Date.now()}_${Math.random().toString(36).slice(2)}.jpg`;
+          await uploadBytes(ref(storage, storagePath), blob);
+          newPhoto.storagePath = storagePath;
+        }
+        photos.push(newPhoto);
+      }
+      const gameDoc = {
+        name: g.name || '',
+        cases: g.cases || [],
+        photos: photos,
+        guideDone: !!g.guideDone,
+        completedBy: g.completedBy || [],
+        note: g.note || '',
+        updatedAt: Date.now()
+      };
+      await setDoc(doc(db, 'games', String(g.id)), gameDoc);
+      migLog_(`  (${i+1}/${games_.length}) ${g.name} - 완료`);
+    }catch(e){
+      migLog_(`  (${i+1}/${games_.length}) ${g.name} - ❌ 실패: ${e.message}`);
+    }
+  }
+
+  // ---- 4) 마무리 ----
+  migLog_('\n[4/4] 목록 새로고침 중...');
+  await loadGames();
+  migLog_('\n✅ 가져오기 완료!');
 }
 
 let showDashboard_ = false;
@@ -1725,7 +1862,8 @@ Object.assign(window, {
   setListSearch, setListSort, toggleWorkComplete, deleteGame,
   toggleGuideDone, updateGameNote,
   openDashboard, closeDashboard, setDashboardFilter, toggleGuideDoneFor,
-  openAccessManagement, approveRequest, rejectRequest, addDirectAccess, removeAccess, addStore, removeStore
+  openAccessManagement, approveRequest, rejectRequest, addDirectAccess, removeAccess, addStore, removeStore,
+  openMigrationTool, startMigration_
 });
 
 // ============================================================
