@@ -91,6 +91,7 @@
   .modal-actions .btn-cancel{background:none; color:var(--ink-soft); border:1px solid var(--line);}
   .modal-actions .btn-apply{background:var(--accent); color:#fff;}
   .presence-banner{background:#FFF6DE; border:1px solid #F0DFA8; color:#7a5b12; font-size:12.5px; font-weight:600; padding:9px 14px; border-radius:8px; margin-bottom:14px;}
+  #roleToggle button.active{background:var(--ink); color:#fff;}
   .label-wrap{position:absolute;}
   .label-rotate-group{position:relative; display:inline-block; transform-origin:center center;}
   .photo-label{background:#000; color:#fff; font-weight:700; padding:6px 10px; border-radius:3px; text-align:center; white-space:pre-wrap; outline:none; min-width:1.5em; cursor:text; box-sizing:border-box; display:flex; align-items:center; justify-content:center;}
@@ -117,6 +118,10 @@
     <div class="brand" style="margin:0;">RED BUTTON<span class="r-mark">®</span></div>
     <div style="flex:1;"></div>
     <span id="roleLabel" style="font-size:12px; color:var(--ink-soft);"></span>
+    <div id="roleToggle" style="display:none; gap:4px; border:1px solid var(--line); border-radius:7px; padding:2px;">
+      <button id="roleViewerBtn" onclick="setRole('viewer')" style="border:none; background:none; padding:5px 10px; font-size:12px; border-radius:5px; cursor:pointer;">뷰어</button>
+      <button id="roleEditorBtn" onclick="setRole('editor')" style="border:none; background:none; padding:5px 10px; font-size:12px; border-radius:5px; cursor:pointer;">편집자</button>
+    </div>
     <button class="btn btn-ghost2" onclick="renderList()">← 목록</button>
     <button class="btn btn-primary2" id="newGameBtn" style="display:none;" onclick="createNewGame()">+ 새 게임</button>
     <button class="btn btn-ghost2" onclick="doLogout()">로그아웃</button>
@@ -240,14 +245,51 @@ async function renderProfileForm(email){
   document.getElementById('submitProfileBtn').addEventListener('click', ()=>submitProfile(email));
 }
 
+let myApprovedRole = 'viewer'; // 로그인 시 실제로 승인된 권한 (강퇴돼도 이 값은 안 바뀜 - 다시 편집자 시도할 자격이 있는지 판단용)
+
 async function enterApp(email, role){
   currentRole = role;
+  myApprovedRole = role;
   document.getElementById('loginGate').style.display = 'none';
   document.getElementById('appRoot').style.display = 'block';
-  document.getElementById('roleLabel').textContent = `${email} · ${role === 'editor' ? '편집자' : '뷰어'}`;
+  document.getElementById('roleLabel').textContent = email;
   document.getElementById('newGameBtn').style.display = role === 'editor' ? 'inline-flex' : 'none';
+  if (myApprovedRole === 'editor'){
+    document.getElementById('roleToggle').style.display = 'flex';
+  }
+  updateRoleToggleUI_();
   await loadGames();
   renderList();
+}
+
+function updateRoleToggleUI_(){
+  const vb = document.getElementById('roleViewerBtn'), eb = document.getElementById('roleEditorBtn');
+  if (vb) vb.classList.toggle('active', currentRole==='viewer');
+  if (eb) eb.classList.toggle('active', currentRole==='editor');
+  const newBtn = document.getElementById('newGameBtn');
+  if (newBtn) newBtn.style.display = currentRole==='editor' ? 'inline-flex' : 'none';
+}
+
+/** 뷰어 ↔ 편집자 전환 버튼. 편집자로 전환하면서 지금 보고 있는 게임의 편집 잠금도 함께 확인합니다. */
+async function setRole(r){
+  if (r === 'editor' && myApprovedRole !== 'editor') return; // 애초에 편집 권한이 없는 계정
+  currentRole = r;
+  updateRoleToggleUI_();
+
+  if (currentGameId){
+    if (r === 'editor'){
+      const gotLock = await ensureEditLockForGame_(currentGameId);
+      if (!gotLock){
+        currentRole = 'viewer';
+        updateRoleToggleUI_();
+      } else {
+        enterPresence_(currentGameId);
+      }
+    } else {
+      leavePresence_();
+    }
+    renderDetail();
+  }
 }
 
 // ============================================================
@@ -357,11 +399,10 @@ async function openGame(id){
     const gotLock = await ensureEditLockForGame_(id);
     if (!gotLock){
       currentRole = 'viewer';
-      const vb = document.getElementById('roleViewerBtn'), eb = document.getElementById('roleEditorBtn');
-      if (vb) vb.classList.add('active');
-      if (eb) eb.classList.remove('active');
+      updateRoleToggleUI_();
+    } else {
+      enterPresence_(id);
     }
-    enterPresence_(id);
     renderDetail();
   }
 }
@@ -1257,9 +1298,7 @@ function enterPresence_(gameId){
     if (holdsEditLock_ && data && data.editLockHolder && data.editLockHolder !== email){
       holdsEditLock_ = false;
       currentRole = 'viewer';
-      const vb = document.getElementById('roleViewerBtn'), eb = document.getElementById('roleEditorBtn');
-      if (vb) vb.classList.add('active');
-      if (eb) eb.classList.remove('active');
+      updateRoleToggleUI_();
       renderDetail();
       alert(`${data.editLockHolder}님이 이 게임의 편집을 시작해서 뷰어로 전환되었습니다.`);
     }
@@ -1350,7 +1389,7 @@ async function saveGame(){
 
 // 전역에 노출 (onclick에서 호출하기 위함 - type="module"은 기본적으로 전역 스코프가 아니라서 필요)
 Object.assign(window, {
-  renderList, openGame, createNewGame, switchMode,
+  renderList, openGame, createNewGame, switchMode, setRole,
   prevPhoto, nextPhoto, uploadPhoto, deletePhoto,
   addCase, updateCaseType, updateItem, deleteItem, saveGame, doLogout,
   updateMarkerCaseType, updateMarkerItem, addMarkerItem, deleteMarkerItem, removeMarkerCase,
