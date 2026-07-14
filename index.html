@@ -91,9 +91,10 @@
   .modal-actions .btn-cancel{background:none; color:var(--ink-soft); border:1px solid var(--line);}
   .modal-actions .btn-apply{background:var(--accent); color:#fff;}
   .label-wrap{position:absolute;}
+  .label-rotate-group{position:relative; display:inline-block; transform-origin:center center;}
   .photo-label{background:#000; color:#fff; font-weight:700; padding:6px 10px; border-radius:3px; text-align:center; white-space:pre-wrap; outline:none; min-width:1.5em; cursor:text; box-sizing:border-box; display:flex; align-items:center; justify-content:center;}
-  .label-resize{position:absolute; right:-6px; bottom:-6px; width:12px; height:12px; background:#fff; border:2px solid var(--accent); border-radius:2px; cursor:nwse-resize;}
-  .label-toolbar{position:absolute; top:-24px; left:0; display:flex; gap:2px; background:var(--surface); border:1px solid var(--line); border-radius:6px; padding:2px; box-shadow:0 2px 6px rgba(0,0,0,.15); white-space:nowrap;}
+  .label-resize{position:absolute; width:12px; height:12px; background:#fff; border:2px solid var(--accent); border-radius:2px; cursor:nwse-resize;}
+  .label-toolbar{position:absolute; display:flex; gap:2px; background:var(--surface); border:1px solid var(--line); border-radius:6px; padding:2px; box-shadow:0 2px 6px rgba(0,0,0,.15); white-space:nowrap;}
   .label-toolbar button{border:none; background:none; font-size:11px; padding:3px 6px; cursor:pointer; border-radius:4px;}
   .label-toolbar button:hover{background:var(--bg);}
   .label-drag{cursor:grab; padding:3px 5px; font-size:11px; color:var(--ink-soft);}
@@ -628,10 +629,15 @@ function createLabelFromMarker(mi){
 function drawLabels(stage, photo, editable){
   stage.querySelectorAll('.label-wrap').forEach(el=>el.remove());
   (photo.labels||[]).forEach((lbl, li)=>{
+    const rotation = lbl.rotation || 0;
     const wrap = document.createElement('div');
     wrap.className = 'label-wrap';
     wrap.style.left = lbl.x+'%';
     wrap.style.top = lbl.y+'%';
+
+    const rotateGroup = document.createElement('div');
+    rotateGroup.className = 'label-rotate-group';
+    rotateGroup.style.transform = `rotate(${rotation}deg)`;
 
     const labelEl = document.createElement('div');
     labelEl.className = 'photo-label';
@@ -644,16 +650,32 @@ function drawLabels(stage, photo, editable){
     }
     labelEl.textContent = lbl.text;
 
+    rotateGroup.appendChild(labelEl);
+    wrap.appendChild(rotateGroup);
+    stage.appendChild(wrap); // 실제 위치/크기를 측정하려면 먼저 화면(DOM)에 붙어있어야 함
+
     if (editable){
       labelEl.contentEditable = 'true';
       labelEl.addEventListener('blur', ()=>{ lbl.text = labelEl.innerText; });
 
+      // 회전 후 실제 화면에 보이는 라벨의 테두리를 측정해서, 툴바는 왼쪽 위
+      // 모서리 바로 위, 손잡이는 오른쪽 아래 모서리에 맞춰 배치합니다.
+      const wrapRect = wrap.getBoundingClientRect();
+      const groupRect = rotateGroup.getBoundingClientRect();
+      const relLeft = groupRect.left - wrapRect.left;
+      const relTop = groupRect.top - wrapRect.top;
+      const relRight = groupRect.right - wrapRect.left;
+      const relBottom = groupRect.bottom - wrapRect.top;
+
       const toolbar = document.createElement('div');
       toolbar.className = 'label-toolbar';
+      toolbar.style.left = relLeft+'px';
+      toolbar.style.top = (relTop-28)+'px';
       toolbar.innerHTML = `
         <span class="label-drag">⠿</span>
         <button onclick="changeLabelFontSize(${li},-1)">A-</button>
         <button onclick="changeLabelFontSize(${li},1)">A+</button>
+        <button onclick="rotateLabel(${li})">⟳</button>
         <button onclick="deleteLabel(${li})">✕</button>
       `;
       toolbar.querySelector('.label-drag').addEventListener('pointerdown', (e)=>{
@@ -671,34 +693,36 @@ function drawLabels(stage, photo, editable){
       });
       wrap.appendChild(toolbar);
 
-      // 크기 조절 손잡이 (오른쪽 아래) - 드래그하면 라벨의 가로/세로 크기가 바뀝니다.
-      // 글자 크기는 그대로 유지되고(A-/A+로 별도 조절), 박스 크기만 바뀝니다.
+      // 크기 조절 손잡이 - 회전과 무관하게 항상 화면상 오른쪽 아래 모서리에 고정합니다.
       const resizeHandle = document.createElement('div');
       resizeHandle.className = 'label-resize';
+      resizeHandle.style.left = (relRight-6)+'px';
+      resizeHandle.style.top = (relBottom-6)+'px';
       resizeHandle.addEventListener('pointerdown', (e)=>{
         e.stopPropagation();
         const stageRect = stage.getBoundingClientRect();
-        const startRect = labelEl.getBoundingClientRect();
-        const startW = startRect.width, startH = startRect.height;
+        const startW = labelEl.getBoundingClientRect().width;
+        const startH = labelEl.getBoundingClientRect().height;
         const startX = e.clientX, startY = e.clientY;
+        const swapped = (rotation === 90 || rotation === 270);
         const move = (ev)=>{
-          const newW = Math.max(20, startW + (ev.clientX-startX));
-          const newH = Math.max(16, startH + (ev.clientY-startY));
-          lbl.widthPct = newW/stageRect.width*100;
-          lbl.heightPct = newH/stageRect.height*100;
-          labelEl.style.width = newW+'px';
-          labelEl.style.height = newH+'px';
+          // 화면에 보이는(회전 후) 크기 기준으로 계산 → 회전돼도 항상 오른쪽 아래를 드래그하는 느낌
+          const visualW = Math.max(20, startW + (ev.clientX-startX));
+          const visualH = Math.max(16, startH + (ev.clientY-startY));
+          const localW = swapped ? visualH : visualW;
+          const localH = swapped ? visualW : visualH;
+          lbl.widthPct = localW/stageRect.width*100;
+          lbl.heightPct = localH/stageRect.height*100;
+          labelEl.style.width = localW+'px';
+          labelEl.style.height = localH+'px';
           labelEl.style.overflow = 'hidden';
         };
-        const up = ()=>{ window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); };
+        const up = ()=>{ window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); redrawCurrentPhoto_(); };
         window.addEventListener('pointermove', move);
         window.addEventListener('pointerup', up);
       });
       wrap.appendChild(resizeHandle);
     }
-
-    wrap.appendChild(labelEl);
-    stage.appendChild(wrap);
   });
 }
 
@@ -707,6 +731,13 @@ function changeLabelFontSize(li, delta){
   const photo = g.photos[currentPhotoIdx];
   const lbl = photo.labels[li];
   lbl.fontSize = Math.max(8, Math.min(48, (lbl.fontSize||14) + delta*2));
+  redrawCurrentPhoto_();
+}
+function rotateLabel(li){
+  const g = games.find(x=>x.id===currentGameId);
+  const photo = g.photos[currentPhotoIdx];
+  const lbl = photo.labels[li];
+  lbl.rotation = ((lbl.rotation||0) + 90) % 360;
   redrawCurrentPhoto_();
 }
 function deleteLabel(li){
@@ -994,7 +1025,7 @@ Object.assign(window, {
   prevPhoto, nextPhoto, uploadPhoto, deletePhoto,
   addCase, updateCaseType, updateItem, deleteItem, saveGame, doLogout,
   updateMarkerCaseType, updateMarkerItem, addMarkerItem, deleteMarkerItem, removeMarkerCase,
-  createLabelFromMarker, changeLabelFontSize, deleteLabel,
+  createLabelFromMarker, changeLabelFontSize, rotateLabel, deleteLabel,
   rotateCrop_, closeCropModal_, applyCropAndUpload_
 });
 
