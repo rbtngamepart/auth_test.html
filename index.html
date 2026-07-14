@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>레드버튼 오거나이징 가이드 (Firebase 로그인 테스트)</title>
+<title>레드버튼 오거나이징 가이드 (Firebase 마이그레이션)</title>
 <style>
   :root{
     --bg: #F6F6F3;
@@ -15,6 +15,7 @@
     --accent-soft: #FCE9E8;
     --danger: #B3492B;
     --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Pretendard', 'Malgun Gothic', sans-serif;
+    --mono: 'SFMono-Regular', Menlo, Consolas, 'Courier New', monospace;
   }
   *{box-sizing:border-box;}
   body{margin:0; background:var(--bg); color:var(--ink); font-family:var(--sans); line-height:1.5;}
@@ -31,17 +32,49 @@
   .field label{display:block; font-size:12px; font-weight:700; margin-bottom:4px; color:var(--ink-soft);}
   .field input, .field select{width:100%; padding:9px 10px; border:1px solid var(--line); border-radius:7px; font-size:13.5px; font-family:var(--sans);}
   .error-box{display:none; color:var(--danger); font-size:12.5px; margin-top:10px; text-align:center;}
-  .success-box{background:var(--accent-soft); color:var(--accent); border-radius:8px; padding:14px; font-size:13px; margin-top:16px; text-align:left;}
   code{background:var(--bg); padding:1px 5px; border-radius:4px; font-size:12px;}
+
+  /* ---- 앱 화면 (로그인 이후) ---- */
+  .topbar{position:sticky; top:0; z-index:20; background:var(--surface); border-bottom:1px solid var(--line); padding:14px 24px; display:flex; align-items:center; gap:14px;}
+  .topbar .btn{width:auto; margin:0; padding:8px 14px;}
+  .topbar .btn-ghost2{background:none; border:1px solid var(--line); color:var(--ink);}
+  .topbar .btn-primary2{background:var(--accent); color:#fff; border:none;}
+  .app{max-width:960px; margin:0 auto; padding:24px;}
+  .game-list{display:grid; grid-template-columns:repeat(auto-fill, minmax(220px,1fr)); gap:12px;}
+  .game-card{background:var(--surface); border:1px solid var(--line); border-radius:12px; padding:16px; cursor:pointer;}
+  .game-card:hover{border-color:var(--accent);}
+  .game-card .name{font-weight:700; font-size:14.5px;}
+  .game-card .meta{font-size:11.5px; color:var(--ink-soft); margin-top:4px;}
+  .back{background:none; border:none; color:var(--ink-soft); font-size:12.5px; cursor:pointer; padding:0; margin-bottom:14px;}
+  .case-table{width:100%; border-collapse:collapse; font-size:13px;}
+  .case-table th{text-align:left; font-size:11px; color:var(--ink-soft); padding:0 8px 8px; border-bottom:1px solid var(--line);}
+  .case-table td{padding:8px; border-bottom:1px solid var(--line); vertical-align:middle;}
+  .case-table input, .case-table select{width:100%; padding:6px 8px; border:1px solid var(--line); border-radius:6px; font-size:13px; font-family:var(--sans);}
+  .case-A{--c:#C1440E;} .case-B{--c:#B08900;} .case-C{--c:#4C7A1F;} .case-D{--c:#1F7A5C;}
+  .case-E{--c:#1F7A8C;} .case-F{--c:#2A5CA6;} .case-G{--c:#5B3FA6;} .case-H{--c:#9C2E8C;}
+  .case-I{--c:#B32E5C;} .case-J{--c:#8C3A2E;} .case-K{--c:#5C5C1F;} .case-L{--c:#3A5C3A;}
+  .case-badge{display:inline-flex; align-items:center; font-family:var(--mono); font-weight:800; font-size:14px; padding:4px 9px; border-radius:6px; border:2px solid var(--c); color:var(--c);}
 </style>
 </head>
 <body>
 
-<div class="login-gate">
+<div class="login-gate" id="loginGate">
   <div class="login-gate-box" id="gateContent">
     <div class="brand">RED BUTTON<span class="r-mark">®</span></div>
     <p>불러오는 중...</p>
   </div>
+</div>
+
+<div id="appRoot" style="display:none;">
+  <div class="topbar">
+    <div class="brand" style="margin:0;">RED BUTTON<span class="r-mark">®</span></div>
+    <div style="flex:1;"></div>
+    <span id="roleLabel" style="font-size:12px; color:var(--ink-soft);"></span>
+    <button class="btn btn-ghost2" onclick="renderList()">← 목록</button>
+    <button class="btn btn-primary2" id="newGameBtn" style="display:none;" onclick="createNewGame()">+ 새 게임</button>
+    <button class="btn btn-ghost2" onclick="doLogout()">로그아웃</button>
+  </div>
+  <div class="app" id="app"></div>
 </div>
 
 <!-- Firebase SDK (CDN, 모듈 방식) -->
@@ -51,7 +84,7 @@ import {
   getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 import {
-  getFirestore, doc, getDoc, setDoc, collection, getDocs
+  getFirestore, doc, getDoc, setDoc, updateDoc, deleteDoc, collection, getDocs, addDoc
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 
 // ============================================================
@@ -72,10 +105,16 @@ const db = getFirestore(app);
 const provider = new GoogleAuthProvider();
 
 const POSITIONS = ['점주','점장','매니저','트레이너','버트너','본사'];
+const CASE_TYPES = ['A','B','C','D','E','F','G','H','I','J','K','L'];
 const gateContent = document.getElementById('gateContent');
+const appEl = document.getElementById('app');
+
+let currentRole = 'viewer';
+let games = [];
+let currentGameId = null;
 
 // ============================================================
-// 화면 상태별 렌더링
+// 로그인 화면 렌더링
 // ============================================================
 function renderLoginButton(){
   gateContent.innerHTML = `
@@ -113,8 +152,6 @@ async function renderProfileForm(email){
     <p style="margin-bottom:14px;">처음 로그인하셨네요. 접근 요청을 위해<br>아래 정보를 입력해주세요.</p>
     <div id="profileFormBody"><p>불러오는 중...</p></div>
   `;
-
-  // stores 컬렉션에서 매장 목록을 가져옵니다. (아직 데이터 이전 전이면 비어있을 수 있음)
   let stores = [];
   try{
     const snap = await getDocs(collection(db, 'stores'));
@@ -147,20 +184,14 @@ async function renderProfileForm(email){
   document.getElementById('submitProfileBtn').addEventListener('click', ()=>submitProfile(email));
 }
 
-function renderApproved(email, role){
-  // 이번 단계(로그인 테스트)에서는 실제 앱 화면 대신 성공 확인만 표시합니다.
-  // 다음 단계에서 여기를 실제 게임 목록 화면으로 교체합니다.
-  gateContent.innerHTML = `
-    <div class="brand">RED BUTTON<span class="r-mark">®</span></div>
-    <div class="success-box">
-      ✅ 로그인 성공!<br><br>
-      <b>계정:</b> ${email}<br>
-      <b>권한:</b> ${role === 'editor' ? '편집자' : '뷰어'}
-    </div>
-    <p style="margin-top:14px; font-size:11.5px;">이건 로그인만 확인하는 테스트 화면입니다.<br>다음 단계에서 실제 게임 목록 화면을 이어 붙입니다.</p>
-    <button class="btn btn-ghost" id="logoutBtn3">로그아웃</button>
-  `;
-  document.getElementById('logoutBtn3').addEventListener('click', ()=>signOut(auth));
+async function enterApp(email, role){
+  currentRole = role;
+  document.getElementById('loginGate').style.display = 'none';
+  document.getElementById('appRoot').style.display = 'block';
+  document.getElementById('roleLabel').textContent = `${email} · ${role === 'editor' ? '편집자' : '뷰어'}`;
+  document.getElementById('newGameBtn').style.display = role === 'editor' ? 'inline-flex' : 'none';
+  await loadGames();
+  renderList();
 }
 
 // ============================================================
@@ -169,13 +200,14 @@ function renderApproved(email, role){
 async function handleGoogleLogin(){
   try{
     await signInWithPopup(auth, provider);
-    // 로그인 성공하면 onAuthStateChanged가 알아서 다음 화면을 그려줍니다.
   }catch(e){
     console.error(e);
     const box = document.getElementById('errorBox');
     if (box){ box.style.display='block'; box.textContent = '로그인에 실패했습니다. 다시 시도해주세요.'; }
   }
 }
+
+function doLogout(){ signOut(auth); }
 
 async function checkAccessAndRender(user){
   const email = user.email.toLowerCase().trim();
@@ -187,8 +219,8 @@ async function checkAccessAndRender(user){
     getDoc(doc(db, 'pending', email)),
   ]);
 
-  if (editorSnap.exists()) return renderApproved(email, 'editor');
-  if (viewerSnap.exists()) return renderApproved(email, 'viewer');
+  if (editorSnap.exists()) return enterApp(email, 'editor');
+  if (viewerSnap.exists()) return enterApp(email, 'viewer');
   if (pendingSnap.exists()) return renderPending(email, false);
   return renderProfileForm(email);
 }
@@ -198,23 +230,135 @@ async function submitProfile(email){
   const name = document.getElementById('nameInput').value.trim();
   const position = document.getElementById('positionSelect').value;
   const errorBox = document.getElementById('profileErrorBox');
-
   if (!storeCode || !name || !position){
     errorBox.style.display = 'block';
     errorBox.textContent = '매장, 이름, 직급을 모두 입력해주세요.';
     return;
   }
-
-  await setDoc(doc(db, 'pending', email), {
-    name, position, storeCode,
-    requestedAt: Date.now()
-  });
-
+  await setDoc(doc(db, 'pending', email), { name, position, storeCode, requestedAt: Date.now() });
   renderPending(email, true);
 }
 
 // ============================================================
-// 로그인 상태 감시 (새로고침해도 로그인 유지됨)
+// 게임 목록 / 상세 (핵심 CRUD) - 이번 단계에서는 사진 없이 케이스만
+// ============================================================
+async function loadGames(){
+  const snap = await getDocs(collection(db, 'games'));
+  games = [];
+  snap.forEach(d => games.push({ id: d.id, ...d.data() }));
+  games.sort((a,b)=> String(a.name||'').localeCompare(String(b.name||''), 'ko'));
+}
+
+function renderList(){
+  currentGameId = null;
+  appEl.innerHTML = `
+    <div class="game-list">
+      ${games.length ? games.map(g=>`
+        <div class="game-card" onclick="openGame('${g.id}')">
+          <div class="name">${g.name || '(이름 없음)'}</div>
+          <div class="meta">케이스 ${(g.cases||[]).length}개</div>
+        </div>
+      `).join('') : '<p>등록된 게임이 없습니다. "+ 새 게임"으로 추가해보세요.</p>'}
+    </div>
+  `;
+}
+
+async function createNewGame(){
+  const name = prompt('새 게임 이름을 입력하세요:');
+  if (!name || !name.trim()) return;
+  const ref = await addDoc(collection(db, 'games'), {
+    name: name.trim(),
+    cases: [],
+    guideDone: false,
+    completedBy: [],
+    note: '',
+    updatedAt: Date.now()
+  });
+  await loadGames();
+  openGame(ref.id);
+}
+
+function openGame(id){
+  currentGameId = id;
+  renderDetail();
+}
+
+function renderDetail(){
+  const g = games.find(x=>x.id===currentGameId);
+  if (!g){ renderList(); return; }
+  const editable = currentRole === 'editor';
+  const cases = g.cases || [];
+
+  let rows = '';
+  cases.forEach((c, ci) => {
+    (c.items||[{name:'',qty:1}]).forEach((it, ii) => {
+      rows += `<tr>`;
+      if (ii === 0){
+        rows += `<td rowspan="${(c.items||[{}]).length}">
+          ${editable
+            ? `<select onchange="updateCaseType(${ci}, this.value)">${CASE_TYPES.map(t=>`<option value="${t}" ${t===c.caseType?'selected':''}>${t}</option>`).join('')}</select>`
+            : `<span class="case-badge case-${c.caseType}">${c.caseType}</span>`}
+        </td>`;
+      }
+      rows += `<td>${editable ? `<input value="${it.name||''}" onchange="updateItem(${ci},${ii},'name',this.value)">` : (it.name||'')}</td>`;
+      rows += `<td style="width:80px;">${editable ? `<input type="number" value="${it.qty||0}" onchange="updateItem(${ci},${ii},'qty',this.value)">` : (it.qty||0)}</td>`;
+      if (editable) rows += `<td style="width:40px;"><button class="btn btn-ghost2" style="padding:4px 8px; width:auto;" onclick="deleteItem(${ci},${ii})">✕</button></td>`;
+      rows += `</tr>`;
+    });
+  });
+
+  appEl.innerHTML = `
+    <button class="back" onclick="renderList()">← 목록으로</button>
+    <h2 style="margin:0 0 16px;">${g.name}</h2>
+    <table class="case-table">
+      <thead><tr><th>케이스</th><th>구성품</th><th>수량</th>${editable?'<th></th>':''}</tr></thead>
+      <tbody>${rows || `<tr><td colspan="4" style="color:var(--ink-soft);">등록된 케이스가 없습니다.</td></tr>`}</tbody>
+    </table>
+    ${editable ? `
+      <div style="margin-top:14px; display:flex; gap:8px;">
+        <button class="btn btn-ghost2" style="width:auto;" onclick="addCase()">+ 케이스 추가</button>
+        <button class="btn btn-primary2" style="width:auto;" onclick="saveGame()">💾 저장</button>
+      </div>
+    ` : ''}
+  `;
+}
+
+function addCase(){
+  const g = games.find(x=>x.id===currentGameId);
+  g.cases = g.cases || [];
+  g.cases.push({ caseType:'A', items:[{name:'새 구성품', qty:1}] });
+  renderDetail();
+}
+function updateCaseType(ci, val){
+  const g = games.find(x=>x.id===currentGameId);
+  g.cases[ci].caseType = val;
+}
+function updateItem(ci, ii, field, val){
+  const g = games.find(x=>x.id===currentGameId);
+  g.cases[ci].items[ii][field] = field === 'qty' ? Number(val) : val;
+}
+function deleteItem(ci, ii){
+  const g = games.find(x=>x.id===currentGameId);
+  g.cases[ci].items.splice(ii, 1);
+  if (g.cases[ci].items.length === 0) g.cases.splice(ci, 1);
+  renderDetail();
+}
+
+async function saveGame(){
+  const g = games.find(x=>x.id===currentGameId);
+  const { id, ...data } = g;
+  data.updatedAt = Date.now();
+  await updateDoc(doc(db, 'games', id), data);
+  alert('저장되었습니다.');
+}
+
+// 전역에 노출 (onclick에서 호출하기 위함 - type="module"은 기본적으로 전역 스코프가 아니라서 필요)
+Object.assign(window, {
+  renderList, openGame, createNewGame, addCase, updateCaseType, updateItem, deleteItem, saveGame, doLogout
+});
+
+// ============================================================
+// 로그인 상태 감시
 // ============================================================
 onAuthStateChanged(auth, (user)=>{
   if (user) checkAccessAndRender(user);
