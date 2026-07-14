@@ -60,7 +60,8 @@
   .tabs button.active{background:var(--ink); color:#fff; border-color:var(--ink);}
   .photo-stage{position:relative; width:100%; aspect-ratio:4/3; background:#111 center/contain no-repeat; border-radius:10px; overflow:hidden;}
   .photo-nav{display:flex; align-items:center; gap:10px; margin-bottom:10px;}
-  .marker{position:absolute; width:14px; height:14px; border-radius:50%; background:var(--accent); border:2px solid #fff; box-shadow:0 1px 4px rgba(0,0,0,.5); transform:translate(-50%,-50%); cursor:grab;}
+  .marker{position:absolute; width:24px; height:24px; border-radius:50%; background:var(--c,var(--accent)); border:2px solid #fff; box-shadow:0 1px 4px rgba(0,0,0,.5); transform:translate(-50%,-50%); cursor:grab; display:flex; align-items:center; justify-content:center; color:#fff; font-family:var(--mono); font-weight:800; font-size:12px; z-index:5;}
+  .line-layer{position:absolute; inset:0; pointer-events:none; z-index:1;}
   .marker:active{cursor:grabbing;}
   .anno-box{position:absolute; background:rgba(255,255,255,.97); border:1px solid var(--line); border-radius:8px; padding:8px; min-width:150px; max-width:220px; box-shadow:0 3px 12px rgba(0,0,0,.25); font-size:11.5px; cursor:grab;}
   .anno-box:active{cursor:grabbing;}
@@ -396,7 +397,7 @@ async function renderPhotoTab(){
   const stage = document.getElementById('photoStage');
   if (!stage) return; // 그 사이 다른 사진으로 넘어갔으면 중단
   stage.style.backgroundImage = `url('${url}')`;
-  stage.innerHTML = '';
+  stage.innerHTML = '<svg class="line-layer" id="lineLayer"></svg>';
   drawMarkers(stage, photo, editable);
   drawLabels(stage, photo, editable);
 
@@ -421,13 +422,18 @@ async function renderPhotoTab(){
 function drawMarkers(stage, photo, editable){
   const g = games.find(x=>x.id===currentGameId);
   stage.querySelectorAll('.marker, .anno-box').forEach(el=>el.remove());
+  const lineLayer = stage.querySelector('#lineLayer');
+  if (lineLayer) lineLayer.innerHTML = '';
 
   (photo.markers||[]).forEach((m, mi)=>{
-    // ---- 마커(점) ----
+    const c = g.cases[m.caseIdx];
+
+    // ---- 마커(케이스 알파벳이 표시된 원) ----
     const dot = document.createElement('div');
-    dot.className = 'marker';
+    dot.className = 'marker' + (c ? ` case-${c.caseType}` : '');
     dot.style.left = m.x+'%';
     dot.style.top = m.y+'%';
+    dot.textContent = c ? c.caseType : '';
     dot.title = `케이스 ${mi+1}`;
     if (editable){
       dot.addEventListener('pointerdown', (e)=>{
@@ -438,6 +444,7 @@ function drawMarkers(stage, photo, editable){
           m.y = Math.max(0, Math.min(100, (ev.clientY-rect.top)/rect.height*100));
           dot.style.left = m.x+'%';
           dot.style.top = m.y+'%';
+          updateConnectingLine_(lineLayer, mi, m);
         };
         const up = ()=>{ window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); };
         window.addEventListener('pointermove', move);
@@ -446,9 +453,20 @@ function drawMarkers(stage, photo, editable){
     }
     stage.appendChild(dot);
 
+    // ---- 마커 ↔ 텍스트박스 연결선 ----
+    if (m.box && lineLayer){
+      const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+      line.setAttribute('id', `connLine${mi}`);
+      line.setAttribute('x1', m.x+'%'); line.setAttribute('y1', m.y+'%');
+      line.setAttribute('x2', m.box.x+'%'); line.setAttribute('y2', m.box.y+'%');
+      line.setAttribute('stroke', 'rgba(255,255,255,.85)');
+      line.setAttribute('stroke-width', '1.5');
+      line.setAttribute('stroke-dasharray', '3,3');
+      lineLayer.appendChild(line);
+    }
+
     // ---- 텍스트박스(케이스 정보 패널) ----
     if (!m.box) return; // 구버전 마커(박스 없이 만들어진 것)는 패널 없이 점만 표시
-    const c = g.cases[m.caseIdx];
     if (!c) return;
 
     const box = document.createElement('div');
@@ -478,12 +496,14 @@ function drawMarkers(stage, photo, editable){
       box.addEventListener('pointerdown', (e)=>{
         if (['INPUT','BUTTON','SELECT','OPTION'].includes(e.target.tagName)) return;
         e.stopPropagation();
+        const lineLayer = stage.querySelector('#lineLayer');
         const move = (ev)=>{
           const rect = stage.getBoundingClientRect();
           m.box.x = Math.max(0, Math.min(100, (ev.clientX-rect.left)/rect.width*100));
           m.box.y = Math.max(0, Math.min(100, (ev.clientY-rect.top)/rect.height*100));
           box.style.left = m.box.x+'%';
           box.style.top = m.box.y+'%';
+          updateConnectingLine_(lineLayer, mi, m);
         };
         const up = ()=>{ window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); };
         window.addEventListener('pointermove', move);
@@ -497,6 +517,14 @@ function drawMarkers(stage, photo, editable){
     }
     stage.appendChild(box);
   });
+}
+
+function updateConnectingLine_(lineLayer, mi, m){
+  if (!lineLayer || !m.box) return;
+  const line = lineLayer.querySelector(`#connLine${mi}`);
+  if (!line) return;
+  line.setAttribute('x1', m.x+'%'); line.setAttribute('y1', m.y+'%');
+  line.setAttribute('x2', m.box.x+'%'); line.setAttribute('y2', m.box.y+'%');
 }
 
 // ---- 텍스트박스 안 편집 동작들 ----
