@@ -229,16 +229,27 @@ async function checkAccessAndRender(user){
   const email = user.email.toLowerCase().trim();
   renderChecking();
 
-  const [editorSnap, viewerSnap, pendingSnap] = await Promise.all([
-    getDoc(doc(db, 'editors', email)),
-    getDoc(doc(db, 'viewers', email)),
-    getDoc(doc(db, 'pending', email)),
-  ]);
+  try{
+    const [editorSnap, viewerSnap, pendingSnap] = await Promise.all([
+      getDoc(doc(db, 'editors', email)),
+      getDoc(doc(db, 'viewers', email)),
+      getDoc(doc(db, 'pending', email)),
+    ]);
 
-  if (editorSnap.exists()) return enterApp(email, 'editor');
-  if (viewerSnap.exists()) return enterApp(email, 'viewer');
-  if (pendingSnap.exists()) return renderPending(email, false);
-  return renderProfileForm(email);
+    if (editorSnap.exists()) return enterApp(email, 'editor');
+    if (viewerSnap.exists()) return enterApp(email, 'viewer');
+    if (pendingSnap.exists()) return renderPending(email, false);
+    return renderProfileForm(email);
+  }catch(e){
+    console.error('로그인 확인 실패:', e);
+    gateContent.innerHTML = `
+      <div class="brand">RED BUTTON<span class="r-mark">®</span></div>
+      <p style="color:var(--danger);">로그인 확인 중 오류가 발생했습니다.<br>(개발자 도구 콘솔에 자세한 내용이 남습니다)</p>
+      <p style="margin-top:8px; font-size:11px; word-break:break-all;">${e.code || e.message || e}</p>
+      <button class="btn btn-ghost" id="logoutBtnErr">다시 로그인</button>
+    `;
+    document.getElementById('logoutBtnErr').addEventListener('click', ()=>signOut(auth));
+  }
 }
 
 async function submitProfile(email){
