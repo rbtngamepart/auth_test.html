@@ -72,6 +72,13 @@
   .anno-item input[type=number]{width:42px; padding:3px 4px; font-size:11px; border:1px solid var(--line); border-radius:4px;}
   .anno-item button{background:none; border:none; color:var(--ink-soft); cursor:pointer; font-size:11px; padding:0 2px;}
   .anno-additem{font-size:10.5px; color:var(--accent); background:none; border:none; cursor:pointer; padding:2px 0; font-weight:700;}
+  .anno-label-btn{background:#000; color:#fff; border:none; border-radius:4px; font-size:10px; padding:3px 8px; cursor:pointer; font-weight:700; margin-top:4px;}
+  .label-wrap{position:absolute;}
+  .photo-label{background:#000; color:#fff; font-weight:700; padding:6px 10px; border-radius:3px; text-align:center; white-space:pre-wrap; outline:none; min-width:1.5em; cursor:text;}
+  .label-toolbar{position:absolute; top:-24px; left:0; display:flex; gap:2px; background:var(--surface); border:1px solid var(--line); border-radius:6px; padding:2px; box-shadow:0 2px 6px rgba(0,0,0,.15); white-space:nowrap;}
+  .label-toolbar button{border:none; background:none; font-size:11px; padding:3px 6px; cursor:pointer; border-radius:4px;}
+  .label-toolbar button:hover{background:var(--bg);}
+  .label-drag{cursor:grab; padding:3px 5px; font-size:11px; color:var(--ink-soft);}
   .upload-row{display:flex; align-items:center; gap:10px; margin-bottom:12px;}
 </style>
 </head>
@@ -391,6 +398,7 @@ async function renderPhotoTab(){
   stage.style.backgroundImage = `url('${url}')`;
   stage.innerHTML = '';
   drawMarkers(stage, photo, editable);
+  drawLabels(stage, photo, editable);
 
   if (editable){
     stage.ondblclick = (e)=>{
@@ -405,6 +413,7 @@ async function renderPhotoTab(){
       photo.markers = photo.markers || [];
       photo.markers.push({ x, y, caseIdx: g.cases.length-1, box:{x:boxX, y:boxY} });
       drawMarkers(stage, photo, editable);
+      drawLabels(stage, photo, editable);
     };
   }
 }
@@ -463,6 +472,7 @@ function drawMarkers(stage, photo, editable){
           `).join('')}
         </div>
         <button class="anno-additem" onclick="addMarkerItem(${mi})">+ 항목 추가</button>
+        <button class="anno-label-btn" onclick="createLabelFromMarker(${mi})">라벨 만들기</button>
       `;
       // 박스 자체를 드래그로 옮기기 (입력창/버튼 클릭은 제외)
       box.addEventListener('pointerdown', (e)=>{
@@ -532,7 +542,84 @@ function redrawCurrentPhoto_(){
   const g = games.find(x=>x.id===currentGameId);
   const photo = g.photos[currentPhotoIdx];
   const stage = document.getElementById('photoStage');
-  if (stage) drawMarkers(stage, photo, currentRole==='editor');
+  if (!stage) return;
+  const editable = currentRole==='editor';
+  drawMarkers(stage, photo, editable);
+  drawLabels(stage, photo, editable);
+}
+
+// ---- 라벨 (실제 라벨기 인쇄 미리보기: 검정 바탕 흰 글씨) ----
+function createLabelFromMarker(mi){
+  const g = games.find(x=>x.id===currentGameId);
+  const photo = g.photos[currentPhotoIdx];
+  const m = photo.markers[mi];
+  const c = g.cases[m.caseIdx];
+  const text = (c.items||[]).map(it => it.qty ? `${it.name} ${it.qty}개` : it.name).join('\n');
+  photo.labels = photo.labels || [];
+  const baseX = m.box ? m.box.x : m.x;
+  const baseY = m.box ? m.box.y : m.y;
+  photo.labels.push({ x: Math.min(94, baseX+6), y: Math.min(90, baseY+10), text, fontSize:14 });
+  redrawCurrentPhoto_();
+}
+
+function drawLabels(stage, photo, editable){
+  stage.querySelectorAll('.label-wrap').forEach(el=>el.remove());
+  (photo.labels||[]).forEach((lbl, li)=>{
+    const wrap = document.createElement('div');
+    wrap.className = 'label-wrap';
+    wrap.style.left = lbl.x+'%';
+    wrap.style.top = lbl.y+'%';
+
+    const labelEl = document.createElement('div');
+    labelEl.className = 'photo-label';
+    labelEl.style.fontSize = (lbl.fontSize||14)+'px';
+    labelEl.textContent = lbl.text;
+
+    if (editable){
+      labelEl.contentEditable = 'true';
+      labelEl.addEventListener('blur', ()=>{ lbl.text = labelEl.innerText; });
+
+      const toolbar = document.createElement('div');
+      toolbar.className = 'label-toolbar';
+      toolbar.innerHTML = `
+        <span class="label-drag">⠿</span>
+        <button onclick="changeLabelFontSize(${li},-1)">A-</button>
+        <button onclick="changeLabelFontSize(${li},1)">A+</button>
+        <button onclick="deleteLabel(${li})">✕</button>
+      `;
+      toolbar.querySelector('.label-drag').addEventListener('pointerdown', (e)=>{
+        e.stopPropagation();
+        const move = (ev)=>{
+          const rect = stage.getBoundingClientRect();
+          lbl.x = Math.max(0, Math.min(100, (ev.clientX-rect.left)/rect.width*100));
+          lbl.y = Math.max(0, Math.min(100, (ev.clientY-rect.top)/rect.height*100));
+          wrap.style.left = lbl.x+'%';
+          wrap.style.top = lbl.y+'%';
+        };
+        const up = ()=>{ window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); };
+        window.addEventListener('pointermove', move);
+        window.addEventListener('pointerup', up);
+      });
+      wrap.appendChild(toolbar);
+    }
+
+    wrap.appendChild(labelEl);
+    stage.appendChild(wrap);
+  });
+}
+
+function changeLabelFontSize(li, delta){
+  const g = games.find(x=>x.id===currentGameId);
+  const photo = g.photos[currentPhotoIdx];
+  const lbl = photo.labels[li];
+  lbl.fontSize = Math.max(8, Math.min(48, (lbl.fontSize||14) + delta*2));
+  redrawCurrentPhoto_();
+}
+function deleteLabel(li){
+  const g = games.find(x=>x.id===currentGameId);
+  const photo = g.photos[currentPhotoIdx];
+  photo.labels.splice(li, 1);
+  redrawCurrentPhoto_();
 }
 
 async function resolvePhotoUrl_(storagePath){
@@ -659,7 +746,8 @@ Object.assign(window, {
   renderList, openGame, createNewGame, switchMode,
   prevPhoto, nextPhoto, uploadPhoto, deletePhoto,
   addCase, updateCaseType, updateItem, deleteItem, saveGame, doLogout,
-  updateMarkerCaseType, updateMarkerItem, addMarkerItem, deleteMarkerItem, removeMarkerCase
+  updateMarkerCaseType, updateMarkerItem, addMarkerItem, deleteMarkerItem, removeMarkerCase,
+  createLabelFromMarker, changeLabelFontSize, deleteLabel
 });
 
 // ============================================================
