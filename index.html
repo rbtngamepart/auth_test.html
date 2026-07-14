@@ -61,7 +61,8 @@
   .photo-stage{position:relative; width:100%; aspect-ratio:4/3; background:#111 center/contain no-repeat; border-radius:10px; overflow:hidden;}
   .photo-nav{display:flex; align-items:center; gap:10px; margin-bottom:10px;}
   .marker{position:absolute; width:24px; height:24px; border-radius:50%; background:var(--c,var(--accent)); border:2px solid #fff; box-shadow:0 1px 4px rgba(0,0,0,.5); transform:translate(-50%,-50%); cursor:grab; display:flex; align-items:center; justify-content:center; color:#fff; font-family:var(--mono); font-weight:800; font-size:12px; z-index:5;}
-  .line-layer{position:absolute; inset:0; pointer-events:none; z-index:1;}
+  .line-layer{position:absolute; inset:0; pointer-events:none; z-index:1; overflow:visible;}
+  .conn-line{position:absolute; height:0; border-top:1.5px dashed rgba(255,255,255,.9); transform-origin:0 0; pointer-events:none;}
   .marker:active{cursor:grabbing;}
   .anno-box{position:absolute; background:rgba(255,255,255,.97); border:1px solid var(--line); border-radius:8px; padding:8px; min-width:150px; max-width:220px; box-shadow:0 3px 12px rgba(0,0,0,.25); font-size:11.5px; cursor:grab;}
   .anno-box:active{cursor:grabbing;}
@@ -397,7 +398,7 @@ async function renderPhotoTab(){
   const stage = document.getElementById('photoStage');
   if (!stage) return; // 그 사이 다른 사진으로 넘어갔으면 중단
   stage.style.backgroundImage = `url('${url}')`;
-  stage.innerHTML = '<svg class="line-layer" id="lineLayer" viewBox="0 0 100 100" preserveAspectRatio="none"></svg>';
+  stage.innerHTML = '<div class="line-layer" id="lineLayer"></div>';
   drawMarkers(stage, photo, editable);
   drawLabels(stage, photo, editable);
 
@@ -444,7 +445,7 @@ function drawMarkers(stage, photo, editable){
           m.y = Math.max(0, Math.min(100, (ev.clientY-rect.top)/rect.height*100));
           dot.style.left = m.x+'%';
           dot.style.top = m.y+'%';
-          updateConnectingLine_(stage, lineLayer, mi, m);
+          drawConnLine_(stage, lineLayer, mi, dot, box);
         };
         const up = ()=>{ window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); };
         window.addEventListener('pointermove', move);
@@ -454,9 +455,10 @@ function drawMarkers(stage, photo, editable){
     stage.appendChild(dot);
 
     // ---- 텍스트박스(케이스 정보 패널) ----
-    if (!m.box || !c) return; // 구버전 마커(박스 없이 만들어진 것)는 패널 없이 점만 표시
+    let box = null;
+    if (!m.box || !c){ return; } // 구버전 마커(박스 없이 만들어진 것)는 패널 없이 점만 표시
 
-    const box = document.createElement('div');
+    box = document.createElement('div');
     box.className = 'anno-box';
     box.style.left = m.box.x+'%';
     box.style.top = m.box.y+'%';
@@ -489,7 +491,7 @@ function drawMarkers(stage, photo, editable){
           m.box.y = Math.max(0, Math.min(100, (ev.clientY-rect.top)/rect.height*100));
           box.style.left = m.box.x+'%';
           box.style.top = m.box.y+'%';
-          updateConnectingLine_(stage, lineLayer, mi, m);
+          drawConnLine_(stage, lineLayer, mi, dot, box);
         };
         const up = ()=>{ window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); };
         window.addEventListener('pointermove', move);
@@ -504,52 +506,44 @@ function drawMarkers(stage, photo, editable){
     stage.appendChild(box);
 
     // ---- 마커 ↔ 텍스트박스 연결선 ----
-    // 박스가 실제로 화면에 그려진 뒤, 그 실제 위치(왼쪽 가장자리 중앙)를 측정해서 선을 긋습니다.
-    // (박스는 왼쪽위 모서리 기준으로 배치되는데, 크기가 내용에 따라 달라지기 때문에
-    //  좌표를 그대로 쓰면 어긋납니다 - 실제로 그려진 뒤 다시 재는 게 가장 정확합니다)
-    if (lineLayer) updateConnectingLine_(stage, lineLayer, mi, m, box);
+    // 둘 다 화면에 실제로 그려진 뒤, 두 요소를 똑같은 방식(getBoundingClientRect)으로
+    // 측정해서 선을 긋습니다. (한쪽은 저장된 값, 한쪽은 측정값을 섞어 쓰면 어긋날 수 있어서
+    // 반드시 같은 방식으로 통일합니다)
+    if (lineLayer) drawConnLine_(stage, lineLayer, mi, dot, box);
   });
 }
 
 /**
- * 연결선을 마커 중심 → 텍스트박스의 실제 렌더링된 위치(왼쪽 가장자리 중앙)로 긋습니다.
- * box를 안 넘기면(드래그 중 갱신 시) 이미 그려진 박스를 다시 찾아서 측정합니다.
+ * 마커(dot)와 텍스트박스(box) 두 DOM 요소의 실제 화면 위치를 측정해서, 그 사이를
+ * 잇는 점선을 순수 CSS(회전된 div)로 그립니다. (SVG 좌표계 관련 문제를 피하기 위해
+ * 일부러 SVG를 쓰지 않습니다)
  */
-function updateConnectingLine_(stage, lineLayer, mi, m, box){
-  if (!lineLayer || !m.box) return;
-  if (!box) box = findBoxForMarker_(stage, mi);
-  if (!box) return;
-
+function drawConnLine_(stage, lineLayer, mi, dot, box){
+  if (!lineLayer || !dot || !box) return;
   const stageRect = stage.getBoundingClientRect();
+  const dotRect = dot.getBoundingClientRect();
   const boxRect = box.getBoundingClientRect();
-  // 박스의 왼쪽 가장자리 중앙 지점 (마커가 대체로 왼쪽에 있으므로 자연스러운 연결점)
-  const anchorX = ((boxRect.left) - stageRect.left) / stageRect.width * 100;
-  const anchorY = ((boxRect.top + boxRect.height/2) - stageRect.top) / stageRect.height * 100;
+
+  const x1 = (dotRect.left + dotRect.width/2) - stageRect.left;
+  const y1 = (dotRect.top + dotRect.height/2) - stageRect.top;
+  const x2 = boxRect.left - stageRect.left; // 박스의 왼쪽 가장자리 중앙 (마커가 대체로 왼쪽에 있음)
+  const y2 = (boxRect.top + boxRect.height/2) - stageRect.top;
+
+  const dx = x2 - x1, dy = y2 - y1;
+  const dist = Math.sqrt(dx*dx + dy*dy);
+  const angle = Math.atan2(dy, dx) * 180 / Math.PI;
 
   let line = lineLayer.querySelector(`#connLine${mi}`);
   if (!line){
-    line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
-    line.setAttribute('id', `connLine${mi}`);
-    line.setAttribute('stroke', 'rgba(255,255,255,.85)');
-    line.setAttribute('stroke-width', '1.5');
-    line.setAttribute('vector-effect', 'non-scaling-stroke');
-    line.setAttribute('stroke-dasharray', '3,3');
+    line = document.createElement('div');
+    line.className = 'conn-line';
+    line.id = `connLine${mi}`;
     lineLayer.appendChild(line);
   }
-  line.setAttribute('x1', m.x); line.setAttribute('y1', m.y);
-  line.setAttribute('x2', anchorX); line.setAttribute('y2', anchorY);
-}
-
-function findBoxForMarker_(stage, mi){
-  // 박스는 순서대로 그려지므로, m.box가 있는 마커들 중 mi번째가 몇 번째 박스인지 찾습니다.
-  const g = games.find(x=>x.id===currentGameId);
-  const photo = g.photos[currentPhotoIdx];
-  let boxIndex = -1;
-  for (let i=0; i<=mi; i++){
-    if (photo.markers[i] && photo.markers[i].box && g.cases[photo.markers[i].caseIdx]) boxIndex++;
-  }
-  const boxes = stage.querySelectorAll('.anno-box');
-  return boxes[boxIndex] || null;
+  line.style.left = x1+'px';
+  line.style.top = y1+'px';
+  line.style.width = dist+'px';
+  line.style.transform = `rotate(${angle}deg)`;
 }
 
 // ---- 텍스트박스 안 편집 동작들 ----
