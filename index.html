@@ -724,7 +724,16 @@ function drawLabels(stage, photo, editable){
       `;
       toolbar.querySelector('.label-drag').addEventListener('pointerdown', (e)=>{
         e.stopPropagation();
-        const labelSize = labelEl.getBoundingClientRect();
+        // labelEl.offsetWidth/Height는 회전 영향을 안 받는 "원래(로컬)" 크기이고,
+        // getBoundingClientRect는 회전이 반영된 "화면에 보이는" 크기입니다.
+        // 90/270도 회전이면 이 둘이 서로 다르므로, 그 차이를 보정값으로 미리 구해둡니다.
+        const localW = labelEl.offsetWidth, localH = labelEl.offsetHeight;
+        const swapped = (rotation === 90 || rotation === 270);
+        const visualW = swapped ? localH : localW;
+        const visualH = swapped ? localW : localH;
+        const offsetXPx = (localW - visualW) / 2; // wrap 기준 위치 → 실제 화면 왼쪽위로 변환하는 보정값
+        const offsetYPx = (localH - visualH) / 2;
+
         const move = (ev)=>{
           const rect = stage.getBoundingClientRect();
           let x = (ev.clientX-rect.left)/rect.width*100;
@@ -734,24 +743,26 @@ function drawLabels(stage, photo, editable){
 
           // ---- 정렬 가이드: 다른 라벨과 가장자리/중앙이 가까우면 딱 맞춰서(스냅) 표시 ----
           const SNAP_PX = 6;
-          const curLeft = x/100*rect.width, curTop = y/100*rect.height;
-          const curRight = curLeft + labelSize.width, curBottom = curTop + labelSize.height;
-          const curCenterX = curLeft + labelSize.width/2, curCenterY = curTop + labelSize.height/2;
+          const flowLeftPx = x/100*rect.width, flowTopPx = y/100*rect.height;
+          const curLeft = flowLeftPx + offsetXPx, curTop = flowTopPx + offsetYPx; // 실제 화면상 위치로 보정
+          const curRight = curLeft + visualW, curBottom = curTop + visualH;
+          const curCenterX = curLeft + visualW/2, curCenterY = curTop + visualH/2;
 
           let bestX = null, bestY = null;
           labelRectsCache_.forEach((r, idx)=>{
             if (!r || idx === li) return;
-            [[curLeft, r.left, 0], [curRight, r.right, -labelSize.width], [curCenterX, r.centerX, -labelSize.width/2]].forEach(([cur, target, adj])=>{
+            [[curLeft, r.left, 0], [curRight, r.right, -visualW], [curCenterX, r.centerX, -visualW/2]].forEach(([cur, target, adj])=>{
               const diff = Math.abs(cur - target);
               if (diff < SNAP_PX && (!bestX || diff < bestX.diff)) bestX = { diff, snap: target+adj, guidePos: target };
             });
-            [[curTop, r.top, 0], [curBottom, r.bottom, -labelSize.height], [curCenterY, r.centerY, -labelSize.height/2]].forEach(([cur, target, adj])=>{
+            [[curTop, r.top, 0], [curBottom, r.bottom, -visualH], [curCenterY, r.centerY, -visualH/2]].forEach(([cur, target, adj])=>{
               const diff = Math.abs(cur - target);
               if (diff < SNAP_PX && (!bestY || diff < bestY.diff)) bestY = { diff, snap: target+adj, guidePos: target };
             });
           });
-          if (bestX) x = (bestX.snap/rect.width)*100;
-          if (bestY) y = (bestY.snap/rect.height)*100;
+          // 스냅된 "화면상 위치"를 다시 wrap의 flow 위치(%)로 역산해서 반영합니다.
+          if (bestX) x = ((bestX.snap - offsetXPx) / rect.width) * 100;
+          if (bestY) y = ((bestY.snap - offsetYPx) / rect.height) * 100;
 
           lbl.x = x; lbl.y = y;
           wrap.style.left = x+'%';
