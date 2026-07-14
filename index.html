@@ -124,6 +124,7 @@
     </div>
     <button class="btn btn-ghost2" onclick="renderList()">← 목록</button>
     <button class="btn btn-primary2" id="newGameBtn" style="display:none;" onclick="createNewGame()">+ 새 게임</button>
+    <button class="btn btn-ghost2" id="dashboardBtn" style="display:none;" onclick="openDashboard()">📊 진행현황</button>
     <button class="btn btn-ghost2" onclick="doLogout()">로그아웃</button>
   </div>
   <div class="app" id="app"></div>
@@ -277,6 +278,8 @@ function updateRoleToggleUI_(){
   if (eb) eb.classList.toggle('active', currentRole==='editor');
   const newBtn = document.getElementById('newGameBtn');
   if (newBtn) newBtn.style.display = currentRole==='editor' ? 'inline-flex' : 'none';
+  const dashBtn = document.getElementById('dashboardBtn');
+  if (dashBtn) dashBtn.style.display = currentRole==='editor' ? 'inline-flex' : 'none';
 }
 
 /** 뷰어 ↔ 편집자 전환 버튼. 편집자로 전환하면서 지금 보고 있는 게임의 편집 잠금도 함께 확인합니다. */
@@ -365,6 +368,66 @@ async function loadGames(){
   games = [];
   snap.forEach(d => games.push({ id: d.id, ...d.data() }));
   games.sort((a,b)=> String(a.name||'').localeCompare(String(b.name||''), 'ko'));
+}
+
+let showDashboard_ = false;
+let dashboardFilter_ = 'all'; // 'all' | 'done' | 'undone'
+
+function openDashboard(){
+  leavePresence_();
+  showDashboard_ = true;
+  currentGameId = null;
+  renderDashboard();
+}
+function closeDashboard(){
+  showDashboard_ = false;
+  renderList();
+}
+function setDashboardFilter(v){ dashboardFilter_ = v; renderDashboard(); }
+
+function renderDashboard(){
+  const total = games.length;
+  const doneCount = games.filter(g=>g.guideDone).length;
+  const pct = total ? Math.round(doneCount/total*100) : 0;
+
+  let filtered = games;
+  if (dashboardFilter_ === 'done') filtered = games.filter(g=>g.guideDone);
+  if (dashboardFilter_ === 'undone') filtered = games.filter(g=>!g.guideDone);
+  filtered = filtered.slice().sort((a,b)=> String(a.name||'').localeCompare(String(b.name||''), 'ko'));
+
+  appEl.innerHTML = `
+    <button class="back" onclick="closeDashboard()">← 목록으로</button>
+    <h2 style="margin:0 0 6px;">📊 작업 진행 현황</h2>
+    <p style="font-size:13px; color:var(--ink-soft); margin:0 0 16px;">${pct}% · 가이드 완료 ${doneCount}/${total}개</p>
+    <div style="height:8px; background:var(--bg); border-radius:99px; overflow:hidden; margin-bottom:16px;">
+      <div style="height:100%; width:${pct}%; background:var(--accent);"></div>
+    </div>
+    <div class="crop-toolbar" style="margin-bottom:14px;">
+      <button onclick="setDashboardFilter('all')" style="${dashboardFilter_==='all'?'background:var(--ink); color:#fff;':''}">전체</button>
+      <button onclick="setDashboardFilter('undone')" style="${dashboardFilter_==='undone'?'background:var(--ink); color:#fff;':''}">가이드 미완료만</button>
+      <button onclick="setDashboardFilter('done')" style="${dashboardFilter_==='done'?'background:var(--ink); color:#fff;':''}">가이드 완료만</button>
+    </div>
+    <table class="case-table">
+      <thead><tr><th>이름</th><th>사진</th><th>가이드완료</th><th>매장 완료</th><th></th></tr></thead>
+      <tbody>
+        ${filtered.map(g=>`
+          <tr>
+            <td>${g.name}</td>
+            <td>${(g.photos||[]).length ? '있음' : '-'}</td>
+            <td><input type="checkbox" ${g.guideDone?'checked':''} onchange="toggleGuideDoneFor(this, '${g.id}')"></td>
+            <td>${(g.completedBy||[]).length}개</td>
+            <td><button class="btn btn-ghost2" style="width:auto; padding:5px 10px; font-size:12px;" onclick="openGame('${g.id}')">열기</button></td>
+          </tr>
+        `).join('') || `<tr><td colspan="5" style="color:var(--ink-soft);">해당하는 게임이 없습니다.</td></tr>`}
+      </tbody>
+    </table>
+  `;
+}
+
+async function toggleGuideDoneFor(checkbox, gameId){
+  const g = games.find(x=>x.id===gameId);
+  g.guideDone = checkbox.checked;
+  await updateDoc(doc(db, 'games', gameId), { guideDone: checkbox.checked });
 }
 
 let listSearch_ = '';
@@ -1524,7 +1587,8 @@ Object.assign(window, {
   rotateCrop_, closeCropModal_, applyCropAndUpload_,
   showHistoryModal_, restoreHistory_,
   setListSearch, setListSort, toggleWorkComplete, deleteGame,
-  toggleGuideDone, updateGameNote
+  toggleGuideDone, updateGameNote,
+  openDashboard, closeDashboard, setDashboardFilter, toggleGuideDoneFor
 });
 
 // ============================================================
