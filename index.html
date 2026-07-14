@@ -444,7 +444,7 @@ function drawMarkers(stage, photo, editable){
           m.y = Math.max(0, Math.min(100, (ev.clientY-rect.top)/rect.height*100));
           dot.style.left = m.x+'%';
           dot.style.top = m.y+'%';
-          updateConnectingLine_(lineLayer, mi, m);
+          updateConnectingLine_(stage, lineLayer, mi, m);
         };
         const up = ()=>{ window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); };
         window.addEventListener('pointermove', move);
@@ -453,22 +453,8 @@ function drawMarkers(stage, photo, editable){
     }
     stage.appendChild(dot);
 
-    // ---- 마커 ↔ 텍스트박스 연결선 ----
-    if (m.box && lineLayer){
-      const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
-      line.setAttribute('id', `connLine${mi}`);
-      line.setAttribute('x1', m.x); line.setAttribute('y1', m.y);
-      line.setAttribute('x2', m.box.x); line.setAttribute('y2', m.box.y);
-      line.setAttribute('stroke', 'rgba(255,255,255,.85)');
-      line.setAttribute('stroke-width', '1.5');
-      line.setAttribute('vector-effect', 'non-scaling-stroke');
-      line.setAttribute('stroke-dasharray', '3,3');
-      lineLayer.appendChild(line);
-    }
-
     // ---- 텍스트박스(케이스 정보 패널) ----
-    if (!m.box) return; // 구버전 마커(박스 없이 만들어진 것)는 패널 없이 점만 표시
-    if (!c) return;
+    if (!m.box || !c) return; // 구버전 마커(박스 없이 만들어진 것)는 패널 없이 점만 표시
 
     const box = document.createElement('div');
     box.className = 'anno-box';
@@ -497,14 +483,13 @@ function drawMarkers(stage, photo, editable){
       box.addEventListener('pointerdown', (e)=>{
         if (['INPUT','BUTTON','SELECT','OPTION'].includes(e.target.tagName)) return;
         e.stopPropagation();
-        const lineLayer = stage.querySelector('#lineLayer');
         const move = (ev)=>{
           const rect = stage.getBoundingClientRect();
           m.box.x = Math.max(0, Math.min(100, (ev.clientX-rect.left)/rect.width*100));
           m.box.y = Math.max(0, Math.min(100, (ev.clientY-rect.top)/rect.height*100));
           box.style.left = m.box.x+'%';
           box.style.top = m.box.y+'%';
-          updateConnectingLine_(lineLayer, mi, m);
+          updateConnectingLine_(stage, lineLayer, mi, m);
         };
         const up = ()=>{ window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); };
         window.addEventListener('pointermove', move);
@@ -517,15 +502,54 @@ function drawMarkers(stage, photo, editable){
       `;
     }
     stage.appendChild(box);
+
+    // ---- 마커 ↔ 텍스트박스 연결선 ----
+    // 박스가 실제로 화면에 그려진 뒤, 그 실제 위치(왼쪽 가장자리 중앙)를 측정해서 선을 긋습니다.
+    // (박스는 왼쪽위 모서리 기준으로 배치되는데, 크기가 내용에 따라 달라지기 때문에
+    //  좌표를 그대로 쓰면 어긋납니다 - 실제로 그려진 뒤 다시 재는 게 가장 정확합니다)
+    if (lineLayer) updateConnectingLine_(stage, lineLayer, mi, m, box);
   });
 }
 
-function updateConnectingLine_(lineLayer, mi, m){
+/**
+ * 연결선을 마커 중심 → 텍스트박스의 실제 렌더링된 위치(왼쪽 가장자리 중앙)로 긋습니다.
+ * box를 안 넘기면(드래그 중 갱신 시) 이미 그려진 박스를 다시 찾아서 측정합니다.
+ */
+function updateConnectingLine_(stage, lineLayer, mi, m, box){
   if (!lineLayer || !m.box) return;
-  const line = lineLayer.querySelector(`#connLine${mi}`);
-  if (!line) return;
+  if (!box) box = findBoxForMarker_(stage, mi);
+  if (!box) return;
+
+  const stageRect = stage.getBoundingClientRect();
+  const boxRect = box.getBoundingClientRect();
+  // 박스의 왼쪽 가장자리 중앙 지점 (마커가 대체로 왼쪽에 있으므로 자연스러운 연결점)
+  const anchorX = ((boxRect.left) - stageRect.left) / stageRect.width * 100;
+  const anchorY = ((boxRect.top + boxRect.height/2) - stageRect.top) / stageRect.height * 100;
+
+  let line = lineLayer.querySelector(`#connLine${mi}`);
+  if (!line){
+    line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+    line.setAttribute('id', `connLine${mi}`);
+    line.setAttribute('stroke', 'rgba(255,255,255,.85)');
+    line.setAttribute('stroke-width', '1.5');
+    line.setAttribute('vector-effect', 'non-scaling-stroke');
+    line.setAttribute('stroke-dasharray', '3,3');
+    lineLayer.appendChild(line);
+  }
   line.setAttribute('x1', m.x); line.setAttribute('y1', m.y);
-  line.setAttribute('x2', m.box.x); line.setAttribute('y2', m.box.y);
+  line.setAttribute('x2', anchorX); line.setAttribute('y2', anchorY);
+}
+
+function findBoxForMarker_(stage, mi){
+  // 박스는 순서대로 그려지므로, m.box가 있는 마커들 중 mi번째가 몇 번째 박스인지 찾습니다.
+  const g = games.find(x=>x.id===currentGameId);
+  const photo = g.photos[currentPhotoIdx];
+  let boxIndex = -1;
+  for (let i=0; i<=mi; i++){
+    if (photo.markers[i] && photo.markers[i].box && g.cases[photo.markers[i].caseIdx]) boxIndex++;
+  }
+  const boxes = stage.querySelectorAll('.anno-box');
+  return boxes[boxIndex] || null;
 }
 
 // ---- 텍스트박스 안 편집 동작들 ----
