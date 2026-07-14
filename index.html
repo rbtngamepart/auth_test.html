@@ -92,6 +92,20 @@
   .modal-actions .btn-apply{background:var(--accent); color:#fff;}
   .presence-banner{background:#FFF6DE; border:1px solid #F0DFA8; color:#7a5b12; font-size:12.5px; font-weight:600; padding:9px 14px; border-radius:8px; margin-bottom:14px;}
   #roleToggle button.active{background:var(--ink); color:#fff;}
+  .pg-body{display:grid; grid-template-columns:1fr 1.3fr; gap:20px; align-items:start;}
+  @media (max-width:800px){ .pg-body{grid-template-columns:1fr;} }
+  .pg-panel{background:var(--surface); border:1px solid var(--line); border-radius:12px; padding:16px;}
+  .pg-panel h3{font-size:14px; margin:0 0 12px;}
+  .pg-game-list{max-height:480px; overflow-y:auto; display:flex; flex-direction:column; gap:2px;}
+  .pg-game-row{display:flex; align-items:center; gap:8px; padding:8px 6px; border-radius:6px; font-size:13px; cursor:pointer;}
+  .pg-game-row:hover{background:var(--bg);}
+  .pg-game-name{flex:1;}
+  .pg-game-id{font-family:var(--mono); font-size:11px; color:var(--ink-soft);}
+  .pg-top50-badge{font-size:10px; font-weight:800; color:var(--accent); background:color-mix(in srgb, var(--accent) 12%, white); border-radius:4px; padding:2px 6px; flex-shrink:0;}
+  .pg-search{width:100%; box-sizing:border-box; padding:8px 10px; border:1px solid var(--line); border-radius:7px; font-size:13px; margin-bottom:10px;}
+  .pg-table{width:100%; border-collapse:collapse; font-size:13px;}
+  .pg-table th{text-align:left; font-size:11.5px; color:var(--ink-soft); font-weight:600; padding:0 8px 8px; border-bottom:1px solid var(--line);}
+  .pg-table td{padding:10px 8px; border-bottom:1px solid var(--line); vertical-align:middle;}
   .label-wrap{position:absolute;}
   .label-rotate-group{position:relative; display:inline-block; transform-origin:center center;}
   .photo-label{background:#000; color:#fff; font-weight:700; padding:6px 10px; border-radius:3px; text-align:center; white-space:pre-wrap; outline:none; min-width:1.5em; cursor:text; box-sizing:border-box; display:flex; align-items:center; justify-content:center;}
@@ -127,6 +141,7 @@
     <button class="btn btn-ghost2" id="dashboardBtn" style="display:none;" onclick="openDashboard()">📊 진행현황</button>
     <button class="btn btn-ghost2" id="accessBtn" style="display:none;" onclick="openAccessManagement()">🔑 권한 관리</button>
     <button class="btn btn-ghost2" id="migrateBtn" style="display:none;" onclick="openMigrationTool()">📥 데이터 가져오기</button>
+    <button class="btn btn-ghost2" onclick="openPurchaseGuide()">🛒 구매 가이드</button>
     <button class="btn btn-ghost2" onclick="doLogout()">로그아웃</button>
   </div>
   <div class="app" id="app"></div>
@@ -166,6 +181,38 @@ const provider = new GoogleAuthProvider();
 
 const POSITIONS = ['점주','점장','매니저','트레이너','버트너','본사'];
 const CASE_TYPES = ['A','B','C','D','E','F','G','H','I','J','K','L'];
+const CASE_SIZES = {A:'65x45x20',B:'82x62x47',C:'85x55x25',D:'88x88x23',E:'95x67x26',F:'105x75x25',
+  G:'105x75x50',H:'105x105x35',I:'115x85x28',J:'145x85x35',K:'210x70x25',L:'325x240x40'};
+
+// 구매 가이드: TOP50 게임 중 플라스틱 케이스로 정리하는 게임 목록 (id → 이름, 폴백 표시용)
+const TOP50_CASE_GAMES = [
+  {id:'103', name:'스플렌더'}, {id:'291', name:'라쿠카라차'}, {id:'428', name:'꼬치의 달인'},
+  {id:'27', name:'라스베가스'}, {id:'717', name:'금지어 게임'}, {id:'142', name:'챠오챠오'},
+  {id:'451', name:'요트다이스'}, {id:'228', name:'센추리 : 향신료의 길'}, {id:'431', name:'5초준다'},
+  {id:'548', name:'스트라이크'}, {id:'42', name:'루핑루이'}, {id:'457', name:'다잉메시지 : 소설가의 마지막 문장'},
+  {id:'71', name:'뱅'}, {id:'3', name:'개조심'}, {id:'4', name:'고스트'}, {id:'47', name:'마법의미로'},
+  {id:'187', name:'톡톡우드맨'}, {id:'216', name:'흔들흔들해적선'}, {id:'80', name:'블로커스'},
+  {id:'896', name:'갈팡질팡'}, {id:'108', name:'아발론'}, {id:'165', name:'코코너츠'}, {id:'580', name:'쿼리도'},
+  {id:'526', name:'코드네임 듀엣'}, {id:'182', name:'텀블링몽키'}, {id:'482', name:'지킬대하이드'},
+  {id:'533', name:'스플렌더 대결'}, {id:'37', name:'렉시오'}
+];
+
+// 구매 가이드: 케이스 종류별 구매 링크·옵션
+const CASE_PRODUCTS = {
+  A: { url:'https://boardm.co.kr/product/detail.html?product_no=7171', option:'S' },
+  B: { url:'https://smartstore.naver.com/gladiakfarm/products/12888522812', option:'-' },
+  C: { url:'https://boardm.co.kr/product/%ED%81%B4%EB%A6%AC%EC%96%B4-%EC%8B%9C%EB%A6%AC%EC%A6%88-%EC%B9%B4%EB%93%9C-%EC%BB%B4%ED%8F%AC%EB%84%8C%ED%8A%B8-%EC%BC%80%EC%9D%B4%EC%8A%A4/7171/category/232/display/1/', option:'M' },
+  D: { url:'https://smartstore.naver.com/2sekaii/products/5817849010', option:'E' },
+  E: { url:'https://smartstore.naver.com/2sekaii/products/5824133560', option:'10번' },
+  F: { url:'https://boardm.co.kr/product/detail.html?product_no=7171', option:'L' },
+  G: { url:'https://boardm.co.kr/product/detail.html?product_no=7171', option:'XL' },
+  H: { url:'https://smartstore.naver.com/gladiakfarm/products/10377353021', option:'105X105x35mm' },
+  I: { url:'https://smartstore.naver.com/modeunstoa/products/9874464661', option:'J-6' },
+  J: { url:'https://smartstore.naver.com/oposys/products/7559274760', option:'-' },
+  K: { url:'https://www.coupang.com/vp/products/7814464766?vendorItemId=93475108031&sourceType=sdp_buybox_winner_offer', option:'Lx화이트x2개' },
+  L: { url:'https://smartstore.naver.com/soholiving/products/4772901420', option:'뉴 심플멀티케이스/대형(45mm)/투명' }
+};
+
 const CHO = ['ㄱ','ㄲ','ㄴ','ㄷ','ㄸ','ㄹ','ㅁ','ㅂ','ㅃ','ㅅ','ㅆ','ㅇ','ㅈ','ㅉ','ㅊ','ㅋ','ㅌ','ㅍ','ㅎ'];
 function getChosung(str){
   let out='';
@@ -641,6 +688,135 @@ async function startMigration_(){
   migLog_('\n[4/4] 목록 새로고침 중...');
   await loadGames();
   migLog_('\n✅ 가져오기 완료!');
+}
+
+/**
+ * ============================================================
+ * 구매 가이드 (뷰어 포함 누구나 볼 수 있음)
+ * ============================================================
+ */
+let purchaseGuideSelected_ = new Set();
+let purchaseGuideSearch_ = '';
+
+function openPurchaseGuide(){
+  leavePresence_();
+  currentGameId = null;
+  showDashboard_ = false;
+
+  appEl.innerHTML = `
+    <button class="back" onclick="renderList()">← 목록으로</button>
+    <h2 style="margin:0 0 6px;">🛒 구매 가이드</h2>
+    <p style="font-size:12.5px; color:var(--ink-soft); max-width:640px; line-height:1.5; margin:0 0 12px;">
+      전체 게임 목록에서 필요한 게임을 선택하면, 그 게임들에 필요한 케이스 수량과 구매 링크를 안내합니다.
+      "TOP50 게임 선택"을 누르면 TOP50 중 플라스틱 케이스로 정리하는 ${TOP50_CASE_GAMES.length}종이 한 번에 선택됩니다.
+      매장에 이미 정리된 게임은 체크를 해제해주세요.
+    </p>
+    <div style="display:flex; gap:8px; margin-bottom:16px;">
+      <button class="btn btn-primary2" style="width:auto;" onclick="selectAllTop50Games()">TOP50 게임 선택</button>
+      <button class="btn btn-ghost2" style="width:auto;" onclick="deselectAllPurchaseGames()">전체 해제</button>
+    </div>
+    <div class="pg-body">
+      <div class="pg-panel">
+        <h3 id="pgSelectedCount">게임 선택</h3>
+        <input type="text" id="pgSearchInput" class="pg-search" placeholder="게임 이름 검색">
+        <div class="pg-game-list" id="pgGameList"></div>
+      </div>
+      <div class="pg-panel">
+        <h3>필요한 케이스</h3>
+        <div id="pgCaseSummary"></div>
+        <p style="font-size:11.5px; color:var(--ink-soft); margin-top:14px; line-height:1.5;">
+          ※ 실시간 재고 확인은 자동으로 제공되지 않습니다. 구매 링크를 눌러 직접 확인해주세요.
+        </p>
+      </div>
+    </div>
+  `;
+
+  document.getElementById('pgSearchInput').addEventListener('input', (e)=>{
+    purchaseGuideSearch_ = e.target.value;
+    renderPurchaseGameList_();
+  });
+
+  renderPurchaseGameList_();
+  renderPurchaseCaseSummary_();
+}
+
+function renderPurchaseGameList_(){
+  const listEl = document.getElementById('pgGameList');
+  const countEl = document.getElementById('pgSelectedCount');
+  if (!listEl) return;
+
+  const top50Ids = new Set(TOP50_CASE_GAMES.map(g=>g.id));
+  const q = purchaseGuideSearch_.trim();
+  const visibleGames = games
+    .filter(g => !q || (g.name||'').includes(q) || getChosung(g.name||'').includes(getChosung(q)))
+    .slice()
+    .sort((a,b)=>String(a.name||'').localeCompare(String(b.name||''), 'ko'));
+
+  listEl.innerHTML = visibleGames.map(g=>{
+    const isTop50 = top50Ids.has(String(g.id));
+    const checked = purchaseGuideSelected_.has(String(g.id));
+    return `
+      <label class="pg-game-row">
+        <input type="checkbox" ${checked?'checked':''} onchange="togglePurchaseGameSelect('${g.id}', this.checked)">
+        <span class="pg-game-name">${g.name}</span>
+        ${isTop50 ? '<span class="pg-top50-badge">TOP50</span>' : ''}
+        <span class="pg-game-id">ID ${g.id}</span>
+      </label>`;
+  }).join('') || '<p style="font-size:12.5px; color:var(--ink-soft);">검색 결과가 없습니다.</p>';
+
+  if (countEl) countEl.textContent = `게임 선택 (${purchaseGuideSelected_.size}개 선택됨)`;
+}
+
+function renderPurchaseCaseSummary_(){
+  const el = document.getElementById('pgCaseSummary');
+  if (!el) return;
+
+  const counts = {};
+  purchaseGuideSelected_.forEach(id=>{
+    const g = games.find(x=>String(x.id)===String(id));
+    if (g && g.cases) g.cases.forEach(c=>{ counts[c.caseType] = (counts[c.caseType]||0) + 1; });
+  });
+  const neededTypes = CASE_TYPES.filter(t=>counts[t]);
+
+  if (!neededTypes.length){
+    el.innerHTML = `<p style="font-size:12.5px; color:var(--ink-soft);">왼쪽에서 게임을 선택하면 필요한 케이스가 여기 표시됩니다.</p>`;
+    return;
+  }
+
+  el.innerHTML = `
+    <table class="pg-table">
+      <thead><tr><th>종류</th><th>사이즈</th><th>필요 수량</th><th>옵션</th><th>구매</th></tr></thead>
+      <tbody>
+        ${neededTypes.map(t=>{
+          const p = CASE_PRODUCTS[t] || {};
+          return `
+          <tr>
+            <td><span class="case-badge case-${t}">${t}</span></td>
+            <td style="font-family:var(--mono); font-size:12px; color:var(--ink-soft);">${CASE_SIZES[t]||'-'}mm</td>
+            <td style="font-weight:700;">${counts[t]}개</td>
+            <td style="font-size:12px; color:var(--ink-soft);">${p.option||'-'}</td>
+            <td>${p.url ? `<a href="${p.url}" target="_blank" rel="noopener" class="btn btn-primary2" style="width:auto; padding:6px 12px; font-size:12.5px; display:inline-flex;">구매하기 ↗</a>` : '-'}</td>
+          </tr>`;
+        }).join('')}
+      </tbody>
+    </table>
+  `;
+}
+
+function togglePurchaseGameSelect(id, checked){
+  if (checked) purchaseGuideSelected_.add(id); else purchaseGuideSelected_.delete(id);
+  renderPurchaseGameList_();
+  renderPurchaseCaseSummary_();
+}
+function selectAllTop50Games(){
+  TOP50_CASE_GAMES.forEach(g=>purchaseGuideSelected_.add(g.id));
+  renderPurchaseGameList_();
+  renderPurchaseCaseSummary_();
+}
+function deselectAllPurchaseGames(){
+  purchaseGuideSelected_.clear();
+  renderPurchaseGameList_();
+  renderPurchaseCaseSummary_();
 }
 
 let showDashboard_ = false;
@@ -1870,7 +2046,8 @@ Object.assign(window, {
   toggleGuideDone, updateGameNote,
   openDashboard, closeDashboard, setDashboardFilter, toggleGuideDoneFor,
   openAccessManagement, approveRequest, rejectRequest, addDirectAccess, removeAccess, addStore, removeStore,
-  openMigrationTool, startMigration_
+  openMigrationTool, startMigration_,
+  openPurchaseGuide, togglePurchaseGameSelect, selectAllTop50Games, deselectAllPurchaseGames
 });
 
 // ============================================================
