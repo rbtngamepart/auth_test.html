@@ -132,7 +132,7 @@ import {
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 import {
   getFirestore, doc, getDoc, setDoc, updateDoc, deleteDoc, collection, getDocs, addDoc,
-  runTransaction, onSnapshot
+  runTransaction, onSnapshot, query, orderBy, limit
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 import {
   getStorage, ref, uploadBytes, getDownloadURL
@@ -376,7 +376,8 @@ function renderDetail(){
     <div id="presenceBannerSlot"></div>
     <div style="display:flex; align-items:center; gap:10px; margin-bottom:16px;">
       <h2 style="margin:0;">${g.name}</h2>
-      ${editable ? `<button class="btn btn-primary2" style="width:auto; padding:6px 14px; font-size:12.5px;" onclick="saveGame()">💾 저장</button>` : ''}
+      ${editable ? `<button class="btn btn-primary2" style="width:auto; padding:6px 14px; font-size:12.5px;" onclick="saveGame()">💾 저장</button>
+      <button class="btn btn-ghost2" style="width:auto; padding:6px 14px; font-size:12.5px;" onclick="showHistoryModal_()">🕐 이전 버전</button>` : ''}
     </div>
     <div class="tabs">
       <button class="${currentMode==='photo'?'active':''}" onclick="switchMode('photo')">사진</button>
@@ -1050,11 +1051,127 @@ async function deletePhoto(){
   renderPhotoTab();
 }
 
-/** 사진/마커 변경사항은 즉시 저장합니다 (표 탭의 케이스 편집은 "저장" 버튼으로 별도 처리) */
+/**
+ * 사진/마커 변경사항은 즉시 저장합니다 (표 탭의 케이스 편집은 "저장" 버튼으로 별도 처리).
+ * 저장할 때마다:
+ *  1) 서버의 현재 버전이 내가 마지막으로 불러온 버전과 다르면(그 사이 다른 편집자가
+ *     먼저 저장했다면) 충돌로 보고 덮어쓰지 않고 최신 내용을 다시 불러옵니다.
+ *  2) 충돌이 없으면, 덮어쓰기 직전의 내용을 이력에 남깁니다 (너무 자주 남기지
+ *     않도록 게임당 3분에 한 번으로 제한합니다).
+ * 이 모든 걸 하나의 트랜잭션으로 처리해서 원자적으로(중간에 끼어들 틈 없이) 실행합니다.
+ */
+let historyLastSavedAt_ = {}; // gameId -> 마지막으로 이력을 남긴 시각 (너무 잦은 이력 생성 방지)
+
 async function persistGame_(g){
-  const { id, ...data } = g;
-  data.updatedAt = Date.now();
-  await updateDoc(doc(db, 'games', id), data);
+  const gameRef = doc(db, 'games', g.id);
+  const basedOnUpdatedAt = g.updatedAt;
+
+  try{
+    const result = await runTransaction(db, async (tx)=>{
+      const snap = await tx.get(gameRef);
+      const serverData = snap.data();
+
+      if (serverData && serverData.updatedAt && basedOnUpdatedAt && serverData.updatedAt !== basedOnUpdatedAt){
+        return { conflict:true, serverGame: { id: g.id, ...serverData } };
+      }
+
+      if (serverData){
+        const lastHistoryAt = historyLastSavedAt_[g.id] || 0;
+        if (Date.now() - lastHistoryAt > 3*60*1000){
+          const historyRef = doc(collection(db, 'games', g.id, 'history'));
+          tx.set(historyRef, { savedAt: Date.now(), snapshot: serverData });
+          historyLastSavedAt_[g.id] = Date.now();
+        }
+      }
+
+      const { id, ...data } = g;
+      data.updatedAt = Date.now();
+      tx.set(gameRef, data);
+      return { conflict:false, newUpdatedAt: data.updatedAt };
+    });
+
+    if (result.conflict){
+      const idx = games.findIndex(x=>x.id===g.id);
+      if (idx !== -1) games[idx] = result.serverGame;
+      if (currentGameId === g.id) renderDetail();
+      alert('⚠ 다른 편집자가 방금 이 게임을 수정해서, 최신 내용을 다시 불러왔습니다.\n방금 편집하신 내용은 다시 적용해주세요.');
+      return false;
+    }
+
+    g.updatedAt = result.newUpdatedAt; // 다음 저장 때 "나 자신"을 충돌로 오판하지 않도록 갱신
+    return true;
+  }catch(e){
+    console.error('저장 실패', e);
+    alert('저장에 실패했습니다. 잠시 후 다시 시도해주세요.');
+    return false;
+  }
+}
+
+/**
+ * ============================================================
+ * 이전 버전(수정 이력) 보기·복원
+ * ============================================================
+ */
+async function showHistoryModal_(){
+  const gameId = currentGameId;
+  const q = query(collection(db, 'games', gameId, 'history'), orderBy('savedAt', 'desc'), limit(5));
+  const snap = await getDocs(q);
+  const items = [];
+  snap.forEach(d => items.push({ id: d.id, ...d.data() }));
+  renderHistoryModal_(gameId, items);
+}
+
+function formatHistoryDate_(ts){
+  const d = new Date(ts);
+  const pad = n => String(n).padStart(2,'0');
+  return `${d.getFullYear()}.${pad(d.getMonth()+1)}.${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+function renderHistoryModal_(gameId, items){
+  const old = document.getElementById('historyBackdrop');
+  if (old) old.remove();
+
+  const backdrop = document.createElement('div');
+  backdrop.className = 'modal-backdrop';
+  backdrop.id = 'historyBackdrop';
+  backdrop.innerHTML = `
+    <div class="modal" style="max-width:420px;">
+      <h3>이전 버전</h3>
+      <p style="font-size:12px; color:var(--ink-soft); margin-top:-8px;">저장할 때마다 직전 내용이 최근 5개까지 자동으로 남습니다.</p>
+      ${items.length ? items.map(h=>`
+        <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; padding:10px 0; border-bottom:1px solid var(--line);">
+          <div>
+            <div style="font-family:var(--mono); font-size:12.5px; font-weight:700;">${formatHistoryDate_(h.savedAt)}</div>
+            <div style="font-size:12px; color:var(--ink-soft);">${h.snapshot.name} · 케이스 ${(h.snapshot.cases||[]).length}개</div>
+          </div>
+          <div style="display:flex; gap:6px;">
+            <button class="btn btn-ghost2" style="width:auto; padding:5px 10px; font-size:12px;" onclick="restoreHistory_('${gameId}','${h.id}')">복원</button>
+          </div>
+        </div>
+      `).join('') : `<p>아직 저장된 이전 버전이 없습니다.</p>`}
+      <div class="modal-actions">
+        <button class="btn-cancel" onclick="document.getElementById('historyBackdrop').remove()">닫기</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(backdrop);
+}
+
+async function restoreHistory_(gameId, historyId){
+  if (!confirm('이 버전으로 되돌릴까요? 현재 내용은 이력에 저장된 뒤 덮어써집니다.')) return;
+  const snap = await getDoc(doc(db, 'games', gameId, 'history', historyId));
+  const item = snap.data();
+  if (!item){ alert('불러오지 못했습니다.'); return; }
+
+  const g = { id: gameId, ...item.snapshot, updatedAt: games.find(x=>x.id===gameId)?.updatedAt };
+  const ok = await persistGame_(g);
+  if (ok){
+    const idx = games.findIndex(x=>x.id===gameId);
+    if (idx !== -1) games[idx] = g;
+    document.getElementById('historyBackdrop')?.remove();
+    if (currentGameId === gameId) renderDetail();
+    alert('복원되었습니다.');
+  }
 }
 
 /**
@@ -1218,8 +1335,8 @@ function deleteItem(ci, ii){
 async function saveGame(){
   const g = games.find(x=>x.id===currentGameId);
   // 사진 탭에서 마커를 옮겼을 수도 있으니, 표 저장 시에도 전체를 같이 저장합니다.
-  await persistGame_(g);
-  alert('저장되었습니다.');
+  const ok = await persistGame_(g);
+  if (ok) alert('저장되었습니다.');
 }
 
 // 전역에 노출 (onclick에서 호출하기 위함 - type="module"은 기본적으로 전역 스코프가 아니라서 필요)
@@ -1229,7 +1346,8 @@ Object.assign(window, {
   addCase, updateCaseType, updateItem, deleteItem, saveGame, doLogout,
   updateMarkerCaseType, updateMarkerItem, addMarkerItem, deleteMarkerItem, removeMarkerCase,
   createLabelFromMarker, changeLabelFontSize, rotateLabel, deleteLabel,
-  rotateCrop_, closeCropModal_, applyCropAndUpload_
+  rotateCrop_, closeCropModal_, applyCropAndUpload_,
+  showHistoryModal_, restoreHistory_
 });
 
 // ============================================================
