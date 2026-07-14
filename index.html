@@ -1078,15 +1078,21 @@ async function persistGame_(g){
       if (serverData){
         const lastHistoryAt = historyLastSavedAt_[g.id] || 0;
         if (Date.now() - lastHistoryAt > 3*60*1000){
+          // 편집 잠금 정보(editLockHolder/editLockAt)는 "지금 누가 편집 중인지"를 나타내는
+          // 실시간 상태일 뿐, 게임 내용이 아니므로 이력에는 남기지 않습니다.
+          // (안 그러면 나중에 이 버전을 복원할 때 그 당시의 잠금 상태까지 같이 되살아나서 꼬입니다)
+          const { editLockHolder, editLockAt, ...contentOnly } = serverData;
           const historyRef = doc(collection(db, 'games', g.id, 'history'));
-          tx.set(historyRef, { savedAt: Date.now(), snapshot: serverData });
+          tx.set(historyRef, { savedAt: Date.now(), snapshot: contentOnly });
           historyLastSavedAt_[g.id] = Date.now();
         }
       }
 
-      const { id, ...data } = g;
+      const { id, editLockHolder, editLockAt, ...data } = g;
       data.updatedAt = Date.now();
-      tx.set(gameRef, data);
+      // merge:true로 저장해서, 이 문서에 있는 편집 잠금 필드(editLockHolder/editLockAt)는
+      // 절대 건드리지 않습니다. (내용 저장과 잠금 상태는 완전히 분리되어야 함)
+      tx.set(gameRef, data, { merge: true });
       return { conflict:false, newUpdatedAt: data.updatedAt };
     });
 
@@ -1163,7 +1169,10 @@ async function restoreHistory_(gameId, historyId){
   const item = snap.data();
   if (!item){ alert('불러오지 못했습니다.'); return; }
 
-  const g = { id: gameId, ...item.snapshot, updatedAt: games.find(x=>x.id===gameId)?.updatedAt };
+  // 혹시 예전에 만들어진 이력에 편집 잠금 정보가 남아있더라도(수정 전 버전), 복원 시
+  // 절대 반영하지 않도록 한 번 더 걸러냅니다.
+  const { editLockHolder, editLockAt, ...contentOnly } = item.snapshot;
+  const g = { id: gameId, ...contentOnly, updatedAt: games.find(x=>x.id===gameId)?.updatedAt };
   const ok = await persistGame_(g);
   if (ok){
     const idx = games.findIndex(x=>x.id===gameId);
