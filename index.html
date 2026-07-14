@@ -54,6 +54,15 @@
   .case-E{--c:#1F7A8C;} .case-F{--c:#2A5CA6;} .case-G{--c:#5B3FA6;} .case-H{--c:#9C2E8C;}
   .case-I{--c:#B32E5C;} .case-J{--c:#8C3A2E;} .case-K{--c:#5C5C1F;} .case-L{--c:#3A5C3A;}
   .case-badge{display:inline-flex; align-items:center; font-family:var(--mono); font-weight:800; font-size:14px; padding:4px 9px; border-radius:6px; border:2px solid var(--c); color:var(--c);}
+
+  .tabs{display:flex; gap:6px; margin-bottom:14px;}
+  .tabs button{background:none; border:1px solid var(--line); border-radius:7px; padding:7px 14px; font-size:12.5px; font-weight:700; color:var(--ink-soft); cursor:pointer;}
+  .tabs button.active{background:var(--ink); color:#fff; border-color:var(--ink);}
+  .photo-stage{position:relative; width:100%; aspect-ratio:4/3; background:#111 center/contain no-repeat; border-radius:10px; overflow:hidden;}
+  .photo-nav{display:flex; align-items:center; gap:10px; margin-bottom:10px;}
+  .marker{position:absolute; width:14px; height:14px; border-radius:50%; background:var(--accent); border:2px solid #fff; box-shadow:0 1px 4px rgba(0,0,0,.5); transform:translate(-50%,-50%); cursor:grab;}
+  .marker:active{cursor:grabbing;}
+  .upload-row{display:flex; align-items:center; gap:10px; margin-bottom:12px;}
 </style>
 </head>
 <body>
@@ -86,6 +95,9 @@ import {
 import {
   getFirestore, doc, getDoc, setDoc, updateDoc, deleteDoc, collection, getDocs, addDoc
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+import {
+  getStorage, ref, uploadBytes, getDownloadURL
+} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-storage.js";
 
 // ============================================================
 // Firebase 설정 (프로젝트 설정 > 내 앱 에서 복사한 값)
@@ -102,6 +114,7 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
+const storage = getStorage(app);
 const provider = new GoogleAuthProvider();
 
 const POSITIONS = ['점주','점장','매니저','트레이너','버트너','본사'];
@@ -112,6 +125,9 @@ const appEl = document.getElementById('app');
 let currentRole = 'viewer';
 let games = [];
 let currentGameId = null;
+let currentMode = 'photo'; // 'photo' | 'table'
+let currentPhotoIdx = 0;
+let photoUrlCache = {}; // storagePath -> 다운로드 URL (매번 다시 안 구해오게)
 
 // ============================================================
 // 로그인 화면 렌더링
@@ -280,14 +296,178 @@ async function createNewGame(){
 
 function openGame(id){
   currentGameId = id;
+  currentMode = 'photo';
+  currentPhotoIdx = 0;
   renderDetail();
 }
 
 function renderDetail(){
   const g = games.find(x=>x.id===currentGameId);
   if (!g){ renderList(); return; }
+
+  appEl.innerHTML = `
+    <button class="back" onclick="renderList()">← 목록으로</button>
+    <h2 style="margin:0 0 16px;">${g.name}</h2>
+    <div class="tabs">
+      <button class="${currentMode==='photo'?'active':''}" onclick="switchMode('photo')">사진</button>
+      <button class="${currentMode==='table'?'active':''}" onclick="switchMode('table')">표</button>
+    </div>
+    <div id="tabBody"></div>
+  `;
+  if (currentMode === 'photo') renderPhotoTab(); else renderTableTab();
+}
+
+function switchMode(m){
+  currentMode = m;
+  currentPhotoIdx = 0;
+  renderDetail();
+}
+
+// ---- 사진 탭 ----
+async function renderPhotoTab(){
+  const g = games.find(x=>x.id===currentGameId);
+  const editable = currentRole === 'editor';
+  const photos = g.photos || [];
+  const body = document.getElementById('tabBody');
+
+  const uploadRowHtml = editable ? `
+    <div class="upload-row">
+      <input type="file" id="photoFileInput" accept="image/*">
+      <button class="btn btn-primary2" style="width:auto;" onclick="uploadPhoto()">업로드</button>
+      <span id="uploadStatus" style="font-size:12px; color:var(--ink-soft);"></span>
+    </div>
+  ` : '';
+
+  if (!photos.length){
+    body.innerHTML = `${uploadRowHtml}<p>등록된 사진이 없습니다.${editable ? ' 위에서 업로드해주세요.' : ''}</p>`;
+    return;
+  }
+
+  if (currentPhotoIdx >= photos.length) currentPhotoIdx = 0;
+  const photo = photos[currentPhotoIdx];
+
+  body.innerHTML = `
+    ${uploadRowHtml}
+    <div class="photo-nav">
+      <button class="btn btn-ghost2" style="width:auto;" onclick="prevPhoto()" ${photos.length<2?'disabled':''}>◀</button>
+      <span style="font-size:12.5px; color:var(--ink-soft);">${currentPhotoIdx+1} / ${photos.length}</span>
+      <button class="btn btn-ghost2" style="width:auto;" onclick="nextPhoto()" ${photos.length<2?'disabled':''}>▶</button>
+      ${editable ? `<button class="btn btn-ghost2" style="width:auto; margin-left:auto;" onclick="deletePhoto()">사진 삭제</button>` : ''}
+    </div>
+    <div class="photo-stage" id="photoStage">
+      <div style="position:absolute; inset:0; display:flex; align-items:center; justify-content:center; color:#999; font-size:12px;">불러오는 중...</div>
+    </div>
+    ${editable ? `<p style="margin-top:8px; font-size:11.5px;">사진의 빈 곳을 더블클릭하면 새 마커가 추가됩니다. 마커는 드래그로 옮길 수 있습니다.</p>` : ''}
+  `;
+
+  const url = await resolvePhotoUrl_(photo.storagePath);
+  const stage = document.getElementById('photoStage');
+  if (!stage) return; // 그 사이 다른 사진으로 넘어갔으면 중단
+  stage.style.backgroundImage = `url('${url}')`;
+  stage.innerHTML = '';
+  drawMarkers(stage, photo, editable);
+
+  if (editable){
+    stage.ondblclick = (e)=>{
+      if (e.target !== stage) return;
+      const rect = stage.getBoundingClientRect();
+      const x = (e.clientX-rect.left)/rect.width*100;
+      const y = (e.clientY-rect.top)/rect.height*100;
+      g.cases = g.cases || [];
+      g.cases.push({ caseType:'A', items:[{name:'새 구성품', qty:1}] });
+      photo.markers = photo.markers || [];
+      photo.markers.push({ x, y, caseIdx: g.cases.length-1 });
+      drawMarkers(stage, photo, editable);
+    };
+  }
+}
+
+function drawMarkers(stage, photo, editable){
+  stage.querySelectorAll('.marker').forEach(el=>el.remove());
+  (photo.markers||[]).forEach((m, mi)=>{
+    const dot = document.createElement('div');
+    dot.className = 'marker';
+    dot.style.left = m.x+'%';
+    dot.style.top = m.y+'%';
+    dot.title = `케이스 ${mi+1}`;
+    if (editable){
+      dot.addEventListener('pointerdown', (e)=>{
+        e.stopPropagation();
+        const move = (ev)=>{
+          const rect = stage.getBoundingClientRect();
+          m.x = Math.max(0, Math.min(100, (ev.clientX-rect.left)/rect.width*100));
+          m.y = Math.max(0, Math.min(100, (ev.clientY-rect.top)/rect.height*100));
+          dot.style.left = m.x+'%';
+          dot.style.top = m.y+'%';
+        };
+        const up = ()=>{ window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); };
+        window.addEventListener('pointermove', move);
+        window.addEventListener('pointerup', up);
+      });
+    }
+    stage.appendChild(dot);
+  });
+}
+
+async function resolvePhotoUrl_(storagePath){
+  if (photoUrlCache[storagePath]) return photoUrlCache[storagePath];
+  const url = await getDownloadURL(ref(storage, storagePath));
+  photoUrlCache[storagePath] = url;
+  return url;
+}
+
+function prevPhoto(){ currentPhotoIdx = Math.max(0, currentPhotoIdx-1); renderPhotoTab(); }
+function nextPhoto(){
+  const g = games.find(x=>x.id===currentGameId);
+  currentPhotoIdx = Math.min((g.photos||[]).length-1, currentPhotoIdx+1);
+  renderPhotoTab();
+}
+
+async function uploadPhoto(){
+  const input = document.getElementById('photoFileInput');
+  const file = input.files[0];
+  if (!file){ alert('파일을 선택해주세요.'); return; }
+  const statusEl = document.getElementById('uploadStatus');
+  statusEl.textContent = '업로드 중...';
+
+  const g = games.find(x=>x.id===currentGameId);
+  const storagePath = `games/${g.id}/${Date.now()}_${file.name}`;
+  try{
+    await uploadBytes(ref(storage, storagePath), file);
+    g.photos = g.photos || [];
+    g.photos.push({ storagePath, markers: [] });
+    currentPhotoIdx = g.photos.length - 1;
+    statusEl.textContent = '';
+    await persistGame_(g);
+    renderPhotoTab();
+  }catch(e){
+    console.error(e);
+    statusEl.textContent = '업로드 실패';
+  }
+}
+
+async function deletePhoto(){
+  if (!confirm('이 사진을 삭제할까요? (마커 정보도 함께 삭제됩니다)')) return;
+  const g = games.find(x=>x.id===currentGameId);
+  g.photos.splice(currentPhotoIdx, 1);
+  currentPhotoIdx = 0;
+  await persistGame_(g);
+  renderPhotoTab();
+}
+
+/** 사진/마커 변경사항은 즉시 저장합니다 (표 탭의 케이스 편집은 "저장" 버튼으로 별도 처리) */
+async function persistGame_(g){
+  const { id, ...data } = g;
+  data.updatedAt = Date.now();
+  await updateDoc(doc(db, 'games', id), data);
+}
+
+// ---- 표 탭 ----
+function renderTableTab(){
+  const g = games.find(x=>x.id===currentGameId);
   const editable = currentRole === 'editor';
   const cases = g.cases || [];
+  const body = document.getElementById('tabBody');
 
   let rows = '';
   cases.forEach((c, ci) => {
@@ -307,9 +487,7 @@ function renderDetail(){
     });
   });
 
-  appEl.innerHTML = `
-    <button class="back" onclick="renderList()">← 목록으로</button>
-    <h2 style="margin:0 0 16px;">${g.name}</h2>
+  body.innerHTML = `
     <table class="case-table">
       <thead><tr><th>케이스</th><th>구성품</th><th>수량</th>${editable?'<th></th>':''}</tr></thead>
       <tbody>${rows || `<tr><td colspan="4" style="color:var(--ink-soft);">등록된 케이스가 없습니다.</td></tr>`}</tbody>
@@ -327,7 +505,7 @@ function addCase(){
   const g = games.find(x=>x.id===currentGameId);
   g.cases = g.cases || [];
   g.cases.push({ caseType:'A', items:[{name:'새 구성품', qty:1}] });
-  renderDetail();
+  renderTableTab();
 }
 function updateCaseType(ci, val){
   const g = games.find(x=>x.id===currentGameId);
@@ -341,20 +519,21 @@ function deleteItem(ci, ii){
   const g = games.find(x=>x.id===currentGameId);
   g.cases[ci].items.splice(ii, 1);
   if (g.cases[ci].items.length === 0) g.cases.splice(ci, 1);
-  renderDetail();
+  renderTableTab();
 }
 
 async function saveGame(){
   const g = games.find(x=>x.id===currentGameId);
-  const { id, ...data } = g;
-  data.updatedAt = Date.now();
-  await updateDoc(doc(db, 'games', id), data);
+  // 사진 탭에서 마커를 옮겼을 수도 있으니, 표 저장 시에도 전체를 같이 저장합니다.
+  await persistGame_(g);
   alert('저장되었습니다.');
 }
 
 // 전역에 노출 (onclick에서 호출하기 위함 - type="module"은 기본적으로 전역 스코프가 아니라서 필요)
 Object.assign(window, {
-  renderList, openGame, createNewGame, addCase, updateCaseType, updateItem, deleteItem, saveGame, doLogout
+  renderList, openGame, createNewGame, switchMode,
+  prevPhoto, nextPhoto, uploadPhoto, deletePhoto,
+  addCase, updateCaseType, updateItem, deleteItem, saveGame, doLogout
 });
 
 // ============================================================
