@@ -992,6 +992,8 @@ function drawMarkers(stage, photo, editable){
           `).join('')}
         </div>
         <button class="anno-additem" onclick="addMarkerItem(${mi})">+ 항목 추가</button>
+        <input type="text" value="${c.note||''}" placeholder="비고 (선택)" style="width:100%; margin-top:6px; padding:4px 6px; font-size:11px; border:1px solid var(--line); border-radius:4px; box-sizing:border-box;"
+          onchange="updateCaseNote(${m.caseIdx}, this.value)">
         <button class="anno-label-btn" onclick="createLabelFromMarker(${mi})">라벨 만들기</button>
       `;
       // 박스 자체를 드래그로 옮기기 (입력창/버튼 클릭은 제외)
@@ -1014,6 +1016,7 @@ function drawMarkers(stage, photo, editable){
       box.innerHTML = `
         <div class="anno-head"><span class="case-badge case-${c.caseType}" style="font-size:11px; padding:2px 6px;">${c.caseType}</span></div>
         ${(c.items||[]).map(it=>`<div style="margin-bottom:2px;">${it.name||''}${it.qty?` <span style="color:var(--ink-soft);">${it.qty}개</span>`:''}</div>`).join('')}
+        ${c.note ? `<div style="margin-top:4px; font-size:11px; color:var(--ink-soft); font-style:italic;">${c.note}</div>` : ''}
       `;
     }
     stage.appendChild(box);
