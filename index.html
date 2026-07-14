@@ -709,6 +709,36 @@ let listSort_ = 'name'; // 'name' | 'updated'
 function renderList(){
   leavePresence_();
   currentGameId = null;
+
+  appEl.innerHTML = `
+    <div style="display:flex; gap:8px; margin-bottom:14px;">
+      <input type="text" id="listSearchInput" placeholder="게임 이름 검색 (초성 가능)" value="${listSearch_}"
+        style="flex:1; padding:9px 12px; border:1px solid var(--line); border-radius:8px; font-size:13px;">
+      <select id="listSortSelect" style="padding:9px 10px; border:1px solid var(--line); border-radius:8px; font-size:13px;">
+        <option value="name" ${listSort_==='name'?'selected':''}>이름순</option>
+        <option value="updated" ${listSort_==='updated'?'selected':''}>최근 수정순</option>
+      </select>
+    </div>
+    <div class="game-list" id="gameListResults"></div>
+  `;
+
+  // 검색창은 매 입력마다 다시 만들지 않고(oninput으로 전체를 다시 그리면 한글 조합이
+  // 깨집니다), 결과 목록만 갱신합니다.
+  document.getElementById('listSearchInput').addEventListener('input', (e)=>{
+    listSearch_ = e.target.value;
+    renderGameListResults_();
+  });
+  document.getElementById('listSortSelect').addEventListener('change', (e)=>{
+    listSort_ = e.target.value;
+    renderGameListResults_();
+  });
+
+  renderGameListResults_();
+}
+
+function renderGameListResults_(){
+  const container = document.getElementById('gameListResults');
+  if (!container) return;
   const editable = currentRole === 'editor';
   const myEmail = auth.currentUser?.email?.toLowerCase();
 
@@ -718,47 +748,21 @@ function renderList(){
     return String(a.name||'').localeCompare(String(b.name||''), 'ko');
   });
 
-  appEl.innerHTML = `
-    <div style="display:flex; gap:8px; margin-bottom:14px;">
-      <input type="text" id="listSearchInput" placeholder="게임 이름 검색 (초성 가능)" value="${listSearch_}"
-        style="flex:1; padding:9px 12px; border:1px solid var(--line); border-radius:8px; font-size:13px;"
-        oninput="setListSearch(this.value)">
-      <select onchange="setListSort(this.value)" style="padding:9px 10px; border:1px solid var(--line); border-radius:8px; font-size:13px;">
-        <option value="name" ${listSort_==='name'?'selected':''}>이름순</option>
-        <option value="updated" ${listSort_==='updated'?'selected':''}>최근 수정순</option>
-      </select>
+  container.innerHTML = filtered.length ? filtered.map(g=>{
+    const done = myEmail && (g.completedBy||[]).includes(myEmail);
+    return `
+    <div class="game-card" style="position:relative;">
+      <div onclick="openGame('${g.id}')" style="cursor:pointer;">
+        <div class="name">${g.name || '(이름 없음)'} ${g.guideDone ? '<span style="color:var(--accent); font-size:11px;">● 가이드완료</span>' : ''}</div>
+        <div class="meta">케이스 ${(g.cases||[]).length}개</div>
+      </div>
+      <label style="display:flex; align-items:center; gap:5px; margin-top:8px; font-size:11.5px; color:var(--ink-soft); cursor:pointer;">
+        <input type="checkbox" ${done?'checked':''} onclick="event.stopPropagation(); toggleWorkComplete('${g.id}', this.checked)"> 작업 완료
+      </label>
+      ${editable ? `<button onclick="event.stopPropagation(); deleteGame('${g.id}')" style="position:absolute; top:12px; right:12px; border:none; background:none; color:var(--ink-soft); cursor:pointer; font-size:13px;">✕</button>` : ''}
     </div>
-    <div class="game-list">
-      ${filtered.length ? filtered.map(g=>{
-        const done = myEmail && (g.completedBy||[]).includes(myEmail);
-        return `
-        <div class="game-card" style="position:relative;">
-          <div onclick="openGame('${g.id}')" style="cursor:pointer;">
-            <div class="name">${g.name || '(이름 없음)'} ${g.guideDone ? '<span style="color:var(--accent); font-size:11px;">● 가이드완료</span>' : ''}</div>
-            <div class="meta">케이스 ${(g.cases||[]).length}개</div>
-          </div>
-          <label style="display:flex; align-items:center; gap:5px; margin-top:8px; font-size:11.5px; color:var(--ink-soft); cursor:pointer;">
-            <input type="checkbox" ${done?'checked':''} onclick="event.stopPropagation(); toggleWorkComplete('${g.id}', this.checked)"> 작업 완료
-          </label>
-          ${editable ? `<button onclick="event.stopPropagation(); deleteGame('${g.id}')" style="position:absolute; top:12px; right:12px; border:none; background:none; color:var(--ink-soft); cursor:pointer; font-size:13px;">✕</button>` : ''}
-        </div>
-      `;}).join('') : '<p>검색 결과가 없습니다.</p>'}
-    </div>
-  `;
+  `;}).join('') : '<p>검색 결과가 없습니다.</p>';
 }
-
-function setListSearch(v){
-  listSearch_ = v;
-  const input = document.getElementById('listSearchInput');
-  const cursorPos = input ? input.selectionStart : null;
-  renderList();
-  const newInput = document.getElementById('listSearchInput');
-  if (newInput && cursorPos != null){
-    newInput.focus();
-    newInput.setSelectionRange(cursorPos, cursorPos);
-  }
-}
-function setListSort(v){ listSort_ = v; renderList(); }
 
 async function toggleWorkComplete(gameId, checked){
   const myEmail = auth.currentUser?.email?.toLowerCase();
@@ -1859,7 +1863,7 @@ Object.assign(window, {
   createLabelFromMarker, changeLabelFontSize, rotateLabel, deleteLabel,
   rotateCrop_, closeCropModal_, applyCropAndUpload_,
   showHistoryModal_, restoreHistory_,
-  setListSearch, setListSort, toggleWorkComplete, deleteGame,
+  toggleWorkComplete, deleteGame,
   toggleGuideDone, updateGameNote,
   openDashboard, closeDashboard, setDashboardFilter, toggleGuideDoneFor,
   openAccessManagement, approveRequest, rejectRequest, addDirectAccess, removeAccess, addStore, removeStore,
