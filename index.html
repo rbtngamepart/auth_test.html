@@ -75,6 +75,21 @@
   .anno-item button{background:none; border:none; color:var(--ink-soft); cursor:pointer; font-size:11px; padding:0 2px;}
   .anno-additem{font-size:10.5px; color:var(--accent); background:none; border:none; cursor:pointer; padding:2px 0; font-weight:700;}
   .anno-label-btn{background:#000; color:#fff; border:none; border-radius:4px; font-size:10px; padding:3px 8px; cursor:pointer; font-weight:700; margin-top:4px;}
+
+  /* ---- 사진 자르기/회전 모달 ---- */
+  .modal-backdrop{position:fixed; inset:0; background:rgba(0,0,0,.55); z-index:300; display:flex; align-items:center; justify-content:center; padding:20px;}
+  .modal{background:var(--surface); border-radius:14px; padding:20px; max-width:520px; width:100%; max-height:90vh; overflow-y:auto;}
+  .modal h3{margin:0 0 12px; font-size:15px;}
+  .crop-toolbar{display:flex; gap:8px; margin-bottom:10px;}
+  .crop-toolbar button{border:1px solid var(--line); background:var(--surface); border-radius:7px; padding:6px 12px; font-size:12.5px; cursor:pointer;}
+  .crop-canvas-wrap{position:relative; width:100%; aspect-ratio:4/3; background:#111; border-radius:8px; overflow:hidden;}
+  .crop-canvas-wrap canvas{position:absolute; inset:0; width:100%; height:100%;}
+  .crop-box{position:absolute; border:1.5px dashed #fff; box-shadow:0 0 0 2000px rgba(0,0,0,.45);}
+  .crop-handle{position:absolute; right:-6px; bottom:-6px; width:14px; height:14px; background:#fff; border:2px solid var(--accent); border-radius:3px; cursor:nwse-resize;}
+  .modal-actions{display:flex; justify-content:flex-end; gap:8px; margin-top:16px;}
+  .modal-actions button{border:none; border-radius:7px; padding:9px 16px; font-size:13px; font-weight:700; cursor:pointer;}
+  .modal-actions .btn-cancel{background:none; color:var(--ink-soft); border:1px solid var(--line);}
+  .modal-actions .btn-apply{background:var(--accent); color:#fff;}
   .label-wrap{position:absolute;}
   .photo-label{background:#000; color:#fff; font-weight:700; padding:6px 10px; border-radius:3px; text-align:center; white-space:pre-wrap; outline:none; min-width:1.5em; cursor:text;}
   .label-toolbar{position:absolute; top:-24px; left:0; display:flex; gap:2px; background:var(--surface); border:1px solid var(--line); border-radius:6px; padding:2px; box-shadow:0 2px 6px rgba(0,0,0,.15); white-space:nowrap;}
@@ -683,26 +698,174 @@ function nextPhoto(){
   renderPhotoTab();
 }
 
-async function uploadPhoto(){
+function uploadPhoto(){
   const input = document.getElementById('photoFileInput');
   const file = input.files[0];
   if (!file){ alert('파일을 선택해주세요.'); return; }
+  openCropModal_(file);
+}
+
+/**
+ * ============================================================
+ * 사진 자르기 · 회전 (업로드 전 편집)
+ * ============================================================
+ */
+let cropState_ = null;
+
+function openCropModal_(file){
+  const url = URL.createObjectURL(file);
+  const img = new Image();
+  img.onload = ()=>{
+    cropState_ = { originalImg: img, img, rotation: 0, fileName: file.name };
+    renderCropModal_();
+  };
+  img.src = url;
+}
+
+function renderCropModal_(){
+  const old = document.getElementById('cropBackdrop');
+  if (old) old.remove();
+
+  const backdrop = document.createElement('div');
+  backdrop.className = 'modal-backdrop';
+  backdrop.id = 'cropBackdrop';
+  backdrop.innerHTML = `
+    <div class="modal">
+      <h3>사진 자르기 · 회전</h3>
+      <div class="crop-toolbar">
+        <button onclick="rotateCrop_(-90)">↺ 왼쪽으로 회전</button>
+        <button onclick="rotateCrop_(90)">회전 ↻ 오른쪽으로</button>
+      </div>
+      <div class="crop-canvas-wrap" id="cropCanvasWrap">
+        <canvas id="cropCanvas"></canvas>
+        <div class="crop-box" id="cropBox"><div class="crop-handle" id="cropHandle"></div></div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn-cancel" onclick="closeCropModal_()">취소</button>
+        <button class="btn-apply" onclick="applyCropAndUpload_()">적용하고 업로드</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(backdrop);
+  setupCropCanvas_();
+}
+
+function setupCropCanvas_(){
+  const wrap = document.getElementById('cropCanvasWrap');
+  const canvas = document.getElementById('cropCanvas');
+  const box = document.getElementById('cropBox');
+  const handle = document.getElementById('cropHandle');
+
+  const img = cropState_.img;
+  const ctx = canvas.getContext('2d');
+  canvas.width = img.width;
+  canvas.height = img.height;
+  ctx.drawImage(img, 0, 0);
+
+  // 처음에는 크롭 박스가 전체 이미지를 덮도록 초기화
+  const rect = wrap.getBoundingClientRect();
+  cropState_.box = { x: 0, y: 0, w: rect.width, h: rect.height };
+  applyBoxStyle_();
+
+  box.onpointerdown = (e)=>{
+    if (e.target === handle) return;
+    const startX = e.clientX, startY = e.clientY;
+    const start = { ...cropState_.box };
+    const move = (ev)=>{
+      const wrapRect = wrap.getBoundingClientRect();
+      let x = start.x + (ev.clientX - startX);
+      let y = start.y + (ev.clientY - startY);
+      x = Math.max(0, Math.min(wrapRect.width - cropState_.box.w, x));
+      y = Math.max(0, Math.min(wrapRect.height - cropState_.box.h, y));
+      cropState_.box.x = x; cropState_.box.y = y;
+      applyBoxStyle_();
+    };
+    const up = ()=>{ window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+  };
+
+  handle.onpointerdown = (e)=>{
+    e.stopPropagation();
+    const startX = e.clientX, startY = e.clientY;
+    const start = { ...cropState_.box };
+    const move = (ev)=>{
+      const wrapRect = wrap.getBoundingClientRect();
+      let w = Math.max(30, Math.min(wrapRect.width - start.x, start.w + (ev.clientX - startX)));
+      let h = Math.max(30, Math.min(wrapRect.height - start.y, start.h + (ev.clientY - startY)));
+      cropState_.box.w = w; cropState_.box.h = h;
+      applyBoxStyle_();
+    };
+    const up = ()=>{ window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+  };
+}
+
+function applyBoxStyle_(){
+  const box = document.getElementById('cropBox');
+  const { x, y, w, h } = cropState_.box;
+  box.style.left = x+'px'; box.style.top = y+'px';
+  box.style.width = w+'px'; box.style.height = h+'px';
+}
+
+function rotateCrop_(deltaDeg){
+  const { originalImg } = cropState_;
+  cropState_.rotation = ((cropState_.rotation || 0) + deltaDeg + 360) % 360;
+  const rot = cropState_.rotation;
+  const swapped = (rot === 90 || rot === 270);
+
+  const rotatedCanvas = document.createElement('canvas');
+  rotatedCanvas.width = swapped ? originalImg.height : originalImg.width;
+  rotatedCanvas.height = swapped ? originalImg.width : originalImg.height;
+  const rctx = rotatedCanvas.getContext('2d');
+  rctx.save();
+  rctx.translate(rotatedCanvas.width/2, rotatedCanvas.height/2);
+  rctx.rotate(rot * Math.PI/180);
+  rctx.drawImage(originalImg, -originalImg.width/2, -originalImg.height/2);
+  rctx.restore();
+
+  cropState_.img = rotatedCanvas;
+  setupCropCanvas_(); // 회전된 이미지 기준으로 캔버스와 크롭 박스를 다시 초기화
+}
+
+function closeCropModal_(){
+  const el = document.getElementById('cropBackdrop');
+  if (el) el.remove();
+  cropState_ = null;
+}
+
+async function applyCropAndUpload_(){
+  const wrap = document.getElementById('cropCanvasWrap');
+  const wrapRect = wrap.getBoundingClientRect();
+  const img = cropState_.img; // 캔버스(회전됐으면) 또는 이미지(회전 안 했으면) - 둘 다 drawImage 가능
+  const scale = img.width / wrapRect.width; // 화면 표시 크기 → 실제 이미지 픽셀 크기 비율
+
+  const { x, y, w, h } = cropState_.box;
+  const sx = x*scale, sy = y*scale, sw = w*scale, sh = h*scale;
+
+  const outCanvas = document.createElement('canvas');
+  outCanvas.width = sw; outCanvas.height = sh;
+  outCanvas.getContext('2d').drawImage(img, sx, sy, sw, sh, 0, 0, sw, sh);
+
+  const blob = await new Promise(res => outCanvas.toBlob(res, 'image/jpeg', 0.9));
+  closeCropModal_();
+
   const statusEl = document.getElementById('uploadStatus');
-  statusEl.textContent = '업로드 중...';
+  if (statusEl) statusEl.textContent = '업로드 중...';
 
   const g = games.find(x=>x.id===currentGameId);
-  const storagePath = `games/${g.id}/${Date.now()}_${file.name}`;
+  const storagePath = `games/${g.id}/${Date.now()}_cropped.jpg`;
   try{
-    await uploadBytes(ref(storage, storagePath), file);
+    await uploadBytes(ref(storage, storagePath), blob);
     g.photos = g.photos || [];
     g.photos.push({ storagePath, markers: [] });
     currentPhotoIdx = g.photos.length - 1;
-    statusEl.textContent = '';
     await persistGame_(g);
     renderPhotoTab();
   }catch(e){
     console.error(e);
-    statusEl.textContent = '업로드 실패';
+    alert('업로드에 실패했습니다.');
   }
 }
 
@@ -794,7 +957,8 @@ Object.assign(window, {
   prevPhoto, nextPhoto, uploadPhoto, deletePhoto,
   addCase, updateCaseType, updateItem, deleteItem, saveGame, doLogout,
   updateMarkerCaseType, updateMarkerItem, addMarkerItem, deleteMarkerItem, removeMarkerCase,
-  createLabelFromMarker, changeLabelFontSize, deleteLabel
+  createLabelFromMarker, changeLabelFontSize, deleteLabel,
+  rotateCrop_, closeCropModal_, applyCropAndUpload_
 });
 
 // ============================================================
